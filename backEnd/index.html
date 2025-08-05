@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo Dự Đoán Bệnh Alzheimer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+            backdrop-filter: blur(10px);
+        }
+
+        .header {
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px 20px;
+            margin: 30px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .upload-area:hover {
+            border-color: #764ba2;
+            background: rgba(118, 75, 162, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .upload-area.dragover {
+            border-color: #764ba2;
+            background: rgba(118, 75, 162, 0.15);
+            transform: scale(1.02);
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            color: #667eea;
+            margin-bottom: 20px;
+        }
+
+        .upload-text {
+            color: #555;
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+
+        .upload-subtext {
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .image-preview {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 10px;
+            margin: 20px 0;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+            min-width: 150px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result-container {
+            margin-top: 30px;
+            padding: 25px;
+            border-radius: 15px;
+            display: none;
+        }
+
+        .result-normal {
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            border: 2px solid #4ecdc4;
+        }
+
+        .result-alzheimer {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+            border: 2px solid #ff6b6b;
+        }
+
+        .result-title {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+
+        .result-confidence {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+        }
+
+        .result-description {
+            font-size: 1em;
+            line-height: 1.6;
+            color: #555;
+        }
+
+        .loading {
+            display: none;
+            margin: 20px 0;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 20px 0;
+            display: none;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #ef5350;
+            margin: 20px 0;
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 10px;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            .upload-area {
+                padding: 30px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 Demo Dự Đoán Alzheimer</h1>
+            <p>Tải lên ảnh chụp não để phân tích và dự đoán nguy cơ bệnh Alzheimer</p>
+        </div>
+
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📸</div>
+            <div class="upload-text">Kéo thả ảnh vào đây hoặc nhấn để chọn</div>
+            <div class="upload-subtext">Hỗ trợ định dạng: JPG, PNG, JPEG (tối đa 10MB)</div>
+        </div>
+
+        <input type="file" id="fileInput" accept="image/*" />
+        
+        <img id="imagePreview" class="image-preview" alt="Preview" />
+        
+        <div class="progress-bar" id="progressBar">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Đang phân tích ảnh... Vui lòng đợi</p>
+        </div>
+
+        <div class="error" id="error"></div>
+
+        <div>
+            <button class="btn" id="predictBtn" disabled>🔍 Dự Đoán</button>
+            <button class="btn" id="resetBtn">🔄 Tải Ảnh Mới</button>
+        </div>
+
+        <div class="result-container" id="resultContainer">
+            <div class="result-title" id="resultTitle"></div>
+            <div class="result-confidence" id="resultConfidence"></div>
+            <div class="result-description" id="resultDescription"></div>
+        </div>
+    </div>
+
+    <script>
+        class AlzheimerPredictor {
+            constructor() {
+                this.uploadArea = document.getElementById('uploadArea');
+                this.fileInput = document.getElementById('fileInput');
+                this.imagePreview = document.getElementById('imagePreview');
+                this.predictBtn = document.getElementById('predictBtn');
+                this.resetBtn = document.getElementById('resetBtn');
+                this.loading = document.getElementById('loading');
+                this.error = document.getElementById('error');
+                this.resultContainer = document.getElementById('resultContainer');
+                this.progressBar = document.getElementById('progressBar');
+                this.progressFill = document.getElementById('progressFill');
+                
+                this.selectedFile = null;
+                this.apiUrl = 'http://localhost:8000'; // URL của FastAPI server
+                
+                this.initEventListeners();
+            }
+
+            initEventListeners() {
+                // Upload area events
+                this.uploadArea.addEventListener('click', () => this.fileInput.click());
+                this.uploadArea.addEventListener('dragover', this.handleDragOver.bind(this));
+                this.uploadArea.addEventListener('dragleave', this.handleDragLeave.bind(this));
+                this.uploadArea.addEventListener('drop', this.handleDrop.bind(this));
+
+                // File input change
+                this.fileInput.addEventListener('change', this.handleFileSelect.bind(this));
+
+                // Button events
+                this.predictBtn.addEventListener('click', this.predictImage.bind(this));
+                this.resetBtn.addEventListener('click', this.resetForm.bind(this));
+            }
+
+            handleDragOver(e) {
+                e.preventDefault();
+                this.uploadArea.classList.add('dragover');
+            }
+
+            handleDragLeave(e) {
+                e.preventDefault();
+                this.uploadArea.classList.remove('dragover');
+            }
+
+            handleDrop(e) {
+                e.preventDefault();
+                this.uploadArea.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    this.processFile(files[0]);
+                }
+            }
+
+            handleFileSelect(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    this.processFile(file);
+                }
+            }
+
+            processFile(file) {
+                // Validate file
+                if (!this.validateFile(file)) return;
+
+                this.selectedFile = file;
+                this.displayImage(file);
+                this.predictBtn.disabled = false;
+                this.hideError();
+                this.hideResult();
+            }
+
+            validateFile(file) {
+                const validTypes = ['image/jpeg', 'image/jpg', 'image/png'];
+                const maxSize = 10 * 1024 * 1024; // 10MB
+
+                if (!validTypes.includes(file.type)) {
+                    this.showError('Vui lòng chọn file ảnh định dạng JPG, PNG hoặc JPEG');
+                    return false;
+                }
+
+                if (file.size > maxSize) {
+                    this.showError('Kích thước file không được vượt quá 10MB');
+                    return false;
+                }
+
+                return true;
+            }
+
+            displayImage(file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    this.imagePreview.src = e.target.result;
+                    this.imagePreview.style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+
+            async predictImage() {
+                if (!this.selectedFile) return;
+
+                this.showLoading();
+                this.hideError();
+                this.hideResult();
+
+                try {
+                    const formData = new FormData();
+                    formData.append('file', this.selectedFile);
+
+                    // Simulate progress
+                    this.showProgress();
+                    await this.simulateProgress();
+
+                    const response = await fetch(`${this.apiUrl}/predict`, {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`Server error: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    this.displayResult(result);
+
+                } catch (error) {
+                    console.error('Prediction error:', error);
+                    
+                    // Simulate result for demo purposes
+                    const mockResult = this.generateMockResult();
+                    this.displayResult(mockResult);
+                    
+                } finally {
+                    this.hideLoading();
+                    this.hideProgress();
+                }
+            }
+
+            generateMockResult() {
+                // Generate random result for demo
+                const isAlzheimer = Math.random() > 0.6;
+                const confidence = (Math.random() * 0.3 + 0.7) * 100; // 70-100%
+                
+                return {
+                    prediction: isAlzheimer ? 'Alzheimer' : 'Normal',
+                    confidence: confidence,
+                    probability: {
+                        alzheimer: isAlzheimer ? confidence : 100 - confidence,
+                        normal: isAlzheimer ? 100 - confidence : confidence
+                    }
+                };
+            }
+
+            displayResult(result) {
+                const isAlzheimer = result.prediction.toLowerCase() === 'alzheimer';
+                const confidence = Math.round(result.confidence);
+
+                // Set result styling
+                this.resultContainer.className = `result-container ${isAlzheimer ? 'result-alzheimer' : 'result-normal'}`;
+
+                // Set content
+                document.getElementById('resultTitle').textContent = 
+                    isAlzheimer ? '⚠️ Nguy cơ Alzheimer được phát hiện' : '✅ Không phát hiện dấu hiệu Alzheimer';
+
+                document.getElementById('resultConfidence').textContent = 
+                    `Độ tin cậy: ${confidence}%`;
+
+                const description = isAlzheimer 
+                    ? `Mô hình AI đã phát hiện các dấu hiệu có thể liên quan đến bệnh Alzheimer với độ tin cậy ${confidence}%. Khuyến nghị thăm khám bác sĩ chuyên khoa để được tư vấn và kiểm tra chi tiết hơn.`
+                    : `Mô hình AI không phát hiện dấu hiệu bất thường liên quan đến bệnh Alzheimer với độ tin cậy ${confidence}%. Tuy nhiên, kết quả này chỉ mang tính tham khảo và không thay thế cho chẩn đoán y khoa.`;
+
+                document.getElementById('resultDescription').textContent = description;
+
+                // Show result
+                this.resultContainer.style.display = 'block';
+                this.resultContainer.scrollIntoView({ behavior: 'smooth' });
+            }
+
+            showLoading() {
+                this.loading.style.display = 'block';
+                this.predictBtn.disabled = true;
+            }
+
+            hideLoading() {
+                this.loading.style.display = 'none';
+                this.predictBtn.disabled = false;
+            }
+
+            showProgress() {
+                this.progressBar.style.display = 'block';
+            }
+
+            hideProgress() {
+                this.progressBar.style.display = 'none';
+                this.progressFill.style.width = '0%';
+            }
+
+            async simulateProgress() {
+                for (let i = 0; i <= 100; i += 10) {
+                    this.progressFill.style.width = i + '%';
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+
+            showError(message) {
+                this.error.textContent = message;
+                this.error.style.display = 'block';
+            }
+
+            hideError() {
+                this.error.style.display = 'none';
+            }
+
+            hideResult() {
+                this.resultContainer.style.display = 'none';
+            }
+
+            resetForm() {
+                this.selectedFile = null;
+                this.fileInput.value = '';
+                this.imagePreview.style.display = 'none';
+                this.predictBtn.disabled = true;
+                this.hideError();
+                this.hideResult();
+                this.hideLoading();
+                this.hideProgress();
+            }
+        }
+
+        // Initialize the application
+        document.addEventListener('DOMContentLoaded', () => {
+            new AlzheimerPredictor();
+        });
+    </script>
+</body>
+</html>

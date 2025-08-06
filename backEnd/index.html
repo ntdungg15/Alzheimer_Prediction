@@ -251,7 +251,15 @@
         </div>
 
         <div class="error" id="error"></div>
-
+		<div style="margin: 20px 0;">
+			<label for="modelSelect" style="font-weight: bold; color: #555;">Chọn mô hình dự đoán:</label>
+			<select id="modelSelect" class="btn" style="min-width: auto; padding: 10px 20px; color: #555">
+				<option value="cnn">CNN</option>
+				<option value="resnet50">Resnet50</option>
+				<option value="vgg16">VGG16</option>
+				<option value="inception-v3">Inception V3</option>
+			</select>
+		</div>
         <div>
             <button class="btn" id="predictBtn" disabled>🔍 Dự Đoán</button>
             <button class="btn" id="resetBtn">🔄 Tải Ảnh Mới</button>
@@ -370,14 +378,15 @@
                 this.hideResult();
 
                 try {
+					const modelName = document.getElementById('modelSelect').value;
                     const formData = new FormData();
                     formData.append('file', this.selectedFile);
-
+					
                     // Simulate progress
                     this.showProgress();
                     await this.simulateProgress();
 
-                    const response = await fetch(`${this.apiUrl}/predict`, {
+                    const response = await fetch(`${this.apiUrl}/predict?model_name=${modelName}`, {
                         method: 'POST',
                         body: formData
                     });

@@ -1,7 +1,10 @@
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
-pillow==10.1.0
-numpy==1.24.3
-tensorflow==2.13.0
-# torch==2.1.0 
+pillow>=10.0.0
+numpy>=1.24.0
+# tensorflow-cpu==2.20.0rc0  # TensorFlow RC cho Python 3.13
+torch>=2.0.0  # PyTorch hỗ trợ Python 3.13 tốt hơn
+torchvision>=0.15.0
+scikit-learn>=1.3.0  # Alternative cho ML
+starlette>=0.27.0

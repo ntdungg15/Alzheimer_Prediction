@@ -4,8 +4,10 @@ from fastapi.responses import JSONResponse
 import numpy as np
 from PIL import Image
 import io
-import tensorflow as tf
-# import torch  # Nếu bạn dùng PyTorch
+import torch
+import torch.nn as nn
+import torchvision.transforms as transforms
+import torchvision.models as models
 import uvicorn
 from typing import Dict, Any
 import logging
@@ -32,88 +34,101 @@ logger = logging.getLogger(__name__)
 
 # Global variable để lưu model
 model = None
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Cấu hình model
-MODEL_PATH = "path/to/your/alzheimer_model.h5"  # Đường dẫn đến model của bạn
-IMG_SIZE = (224, 224)  # Kích thước ảnh input cho model
-CLASS_NAMES = ["Normal", "Alzheimer"]  # Tên các class
+MODEL_PATH = "models/resnet50-aug.pth"  # Đường dẫn đến model PyTorch
+IMG_SIZE = (128, 128)  # Kích thước ảnh input cho model
+CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]  # Tên các class
 
 def load_model():
     """Load model AI đã train"""
     global model
     try:
-        # Với TensorFlow/Keras
-        model = tf.keras.models.load_model(MODEL_PATH)
-        logger.info(f"Model loaded successfully from {MODEL_PATH}")
+        model = models.resnet50(weights=None)  # Không load pretrained weights
+        model.fc = nn.Identity()
+        model.fc = nn.Sequential(
+            nn.Dropout(p=0.3),                   # dropout_0
+            nn.Flatten(),                        # flatten
+            
+            nn.BatchNorm1d(2048),                # batch_normalization
+            nn.Linear(2048, 1024),               # dense
+            
+            nn.BatchNorm1d(1024),                # batch_normalization_1
+            nn.Linear(1024, 512),                # dense_1
+            
+            nn.BatchNorm1d(512),                 # batch_normalization_2
+            nn.ReLU(),                           # activation
+            nn.Dropout(p=0.3),                   # dropout_2
         
-        # Với PyTorch (uncomment nếu dùng PyTorch)
-        # model = torch.load(MODEL_PATH, map_location='cpu')
-        # model.eval()
+            nn.Linear(512, 256),                 # dense_2
+            nn.BatchNorm1d(256),                 # batch_normalization_3
+            nn.ReLU(),                           # activation_1
+            nn.Dropout(p=0.3),                   # dropout_3
+        
+            nn.Linear(256, 4)          # dense_3 (output)
+        )
+        # Với PyTorch
+        model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+        model.to(device)
+        model.eval()
+        logger.info(f"Model loaded successfully from {MODEL_PATH}")
         
     except Exception as e:
         logger.error(f"Error loading model: {str(e)}")
-        # Tạo mock model cho demo
-        model = create_mock_model()
 
-def create_mock_model():
-    """Tạo mock model cho demo khi không có model thật"""
-    logger.info("Creating mock model for demo purposes")
-    
-    class MockModel:
-        def predict(self, x):
-            # Tạo kết quả random để demo
-            batch_size = x.shape[0]
-            # Random prediction với xác suất nghiêng về Normal (80%)
-            predictions = np.random.random((batch_size, 2))
-            predictions[:, 0] = predictions[:, 0] * 0.8 + 0.1  # Normal: 10-90%
-            predictions[:, 1] = 1 - predictions[:, 0]  # Alzheimer: phần còn lại
-            return predictions
-    
-    return MockModel()
-
-def preprocess_image(image: Image.Image) -> np.ndarray:
-    """Tiền xử lý ảnh để đưa vào model"""
+def preprocess_image(image: Image.Image) -> torch.Tensor:
+    """Tiền xử lý ảnh để đưa vào model với PyTorch"""
     try:
+        # Định nghĩa transform pipeline
+        transform = transforms.Compose([
+            transforms.Resize(IMG_SIZE),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=[0.278, 0.278, 0.27828214], 
+                std=[0.32666304, 0.32666304, 0.32666304]
+            )
+        ])
+        
         # Chuyển sang RGB nếu cần
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
-        # Resize ảnh về kích thước model yêu cầu
-        image = image.resize(IMG_SIZE)
+        # Apply transforms và thêm batch dimension
+        img_tensor = transform(image).unsqueeze(0)
         
-        # Chuyển thành numpy array
-        img_array = np.array(image)
-        
-        # Normalize pixel values về [0,1]
-        img_array = img_array.astype(np.float32) / 255.0
-        
-        # Thêm batch dimension
-        img_array = np.expand_dims(img_array, axis=0)
-        
-        return img_array
+        return img_tensor.to(device)
         
     except Exception as e:
         logger.error(f"Error preprocessing image: {str(e)}")
         raise HTTPException(status_code=400, detail="Không thể xử lý ảnh")
 
-def postprocess_prediction(prediction: np.ndarray) -> Dict[str, Any]:
-    """Xử lý kết quả prediction từ model"""
+def postprocess_prediction(prediction: torch.Tensor) -> Dict[str, Any]:
+    """Xử lý kết quả prediction từ model PyTorch"""
     try:
-        # Lấy xác suất của từng class
+        if hasattr(prediction, 'cpu'):
+            prediction = prediction.cpu().detach().numpy()
+        elif hasattr(prediction, 'detach'):
+            prediction = prediction.detach().numpy()
+        
         probabilities = prediction[0]
         
-        # Tìm class có xác suất cao nhất
+        logger.info("probabilities: " + str(probabilities))
+        
+        probabilities = np.exp(probabilities) / np.sum(np.exp(probabilities))
+        
         predicted_class_idx = np.argmax(probabilities)
         predicted_class = CLASS_NAMES[predicted_class_idx]
         confidence = float(probabilities[predicted_class_idx]) * 100
         
-        # Tạo response
         result = {
             "prediction": predicted_class,
             "confidence": confidence,
             "probability": {
-                "normal": float(probabilities[0]) * 100,
-                "alzheimer": float(probabilities[1]) * 100
+                CLASS_NAMES[0]: float(probabilities[0]) * 100,
+                CLASS_NAMES[1]: float(probabilities[1]) * 100,
+                CLASS_NAMES[2]: float(probabilities[2]) * 100,
+                CLASS_NAMES[3]: float(probabilities[3]) * 100,
             },
             "status": "success"
         }
@@ -181,9 +196,11 @@ async def predict_alzheimer(file: UploadFile = File(...)):
         
         # Dự đoán với model
         logger.info("Making prediction...")
-        prediction = model.predict(processed_image)
+        with torch.no_grad():
+            prediction = model(processed_image)
         
         # Xử lý kết quả
+        logger.info("handling results...")
         result = postprocess_prediction(prediction)
         
         logger.info(f"Prediction completed: {result['prediction']} ({result['confidence']:.2f}%)")

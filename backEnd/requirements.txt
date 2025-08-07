@@ -13,9 +13,10 @@ pillow>=10.0.0
 # Core ML libraries
 numpy>=1.24.0,<2.0.0
 
-# PyTorch (choose this OR TensorFlow, not both)
+# Choose ONE of these ML frameworks:
+# Option 1: PyTorch (uncomment if using PyTorch)
 torch>=2.1.0
 torchvision>=0.16.0
 
-# TensorFlow (uncomment if needed instead of PyTorch)
+# Option 2: TensorFlow (for Inception V3 model từ Kaggle)
 tensorflow>=2.13.0 

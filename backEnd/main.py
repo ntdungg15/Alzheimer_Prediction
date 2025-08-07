@@ -142,10 +142,14 @@ class VGG16Binary(nn.Module):
     def forward(self, x):
         return self.vgg16(x)
 
-# Định nghĩa Inception V3 model class cho TensorFlow - MATCH với Kaggle notebook
+# Định nghĩa Inception V3 model class cho TensorFlow - MATCH với Kaggle notebook CHÍNH XÁC
 class InceptionV3AlzheimerModel:
     """
-    Inception V3 model for Alzheimer prediction matching Kaggle implementation
+    Inception V3 model for Alzheimer prediction matching Kaggle implementation EXACTLY
+    Kaggle architecture:
+    - Input: (128, 128, 3)
+    - InceptionV3(imagenet, include_top=False) 
+    - Dropout(0.5) -> Flatten() -> Dense(1024) -> Dense(512) -> Dense(256) -> Dense(128) -> Dense(4, softmax)
     """
     def __init__(self, num_classes=4, input_size=(128, 128, 3)):
         if not TF_AVAILABLE:
@@ -157,53 +161,49 @@ class InceptionV3AlzheimerModel:
         self._build_model()
     
     def _build_model(self):
-        """Build Inception V3 model exactly matching Kaggle notebook"""
+        """Build Inception V3 model EXACTLY matching Kaggle notebook"""
         try:
             from tensorflow.keras.applications import InceptionV3
             from tensorflow.keras.layers import Dense, Dropout, Flatten
             from tensorflow.keras.models import Model
             import tensorflow as tf
             
-            # Base Inception V3 model - MATCH Kaggle
+            # Base Inception V3 model - EXACT MATCH với Kaggle
             inception = InceptionV3(
-                input_shape=self.input_size,  # (128, 128, 3) 
+                input_shape=(128, 128, 3),  # EXACT: (128, 128, 3)
                 weights='imagenet', 
                 include_top=False
             )
             
-            # Freeze all layers - MATCH Kaggle
+            # Freeze all layers - EXACT MATCH với Kaggle
             for layer in inception.layers:
                 layer.trainable = False
                 
-            # Custom classifier - MATCH Kaggle exactly
-            x = Dropout(0.5)(inception.output)      
-            x = Flatten()(x)                        
-            x = Dense(1024, activation='relu')(x)   
-            x = Dense(512, activation='relu')(x)    
-            x = Dense(256, activation='relu')(x)    
-            x = Dense(128, activation='relu')(x)    
+            # Custom classifier - EXACT MATCH với Kaggle architecture
+            x = Dropout(0.5)(inception.output)      # Dropout trước Flatten
+            x = Flatten()(x)                        # Flatten feature maps
+            x = Dense(1024, activation='relu')(x)   # Dense 1024 
+            x = Dense(512, activation='relu')(x)    # Dense 512
+            x = Dense(256, activation='relu')(x)    # Dense 256
+            x = Dense(128, activation='relu')(x)    # Dense 128
             
-            # Output layer
-            prediction = Dense(self.num_classes, activation='softmax')(x)
+            # Output layer cho 4 classes: [MildDemented, ModerateDemented, NonDemented, VeryMildDemented]
+            prediction = Dense(4, activation='softmax')(x)
             
             # Create model
             self.model = Model(inputs=inception.input, outputs=prediction)
             
             # Compile model - MATCH Kaggle
-            METRICS = [
-                tf.keras.metrics.CategoricalAccuracy(name='acc'),
-                tf.keras.metrics.AUC(name='auc'),
-            ]
-            
             self.model.compile(
                 optimizer='adam',
-                loss=tf.losses.CategoricalCrossentropy(),
-                metrics=METRICS
+                loss='categorical_crossentropy',  # For 4-class categorical labels
+                metrics=['accuracy']
             )
             
-            logger.info("Inception V3 model built successfully")
+            logger.info("Inception V3 model built successfully - EXACT Kaggle match")
             logger.info(f"Model input shape: {self.model.input_shape}")
             logger.info(f"Model output shape: {self.model.output_shape}")
+            logger.info("Architecture: InceptionV3 -> Dropout(0.5) -> Flatten -> Dense(1024) -> Dense(512) -> Dense(256) -> Dense(128) -> Dense(4)")
             
         except Exception as e:
             logger.error(f"Error building Inception V3 model: {str(e)}")
@@ -281,27 +281,32 @@ def load_model(model_name: str = "cnn"):
             if not TF_AVAILABLE:
                 raise ImportError("TensorFlow không có sẵn")
             
-            # Special handling for Inception V3
+            # Special handling for Inception V3 - LOAD từ file .h5 Kaggle
             if model_name == "inception-v3":
                 try:
-                    # Try to load saved model first
+                    # Load model trực tiếp từ file .h5 (Kaggle exported model)
                     model = tf.keras.models.load_model(config["path"])
-                    logger.info(f"Loaded pre-trained Inception V3 from {config['path']}")
+                    logger.info(f"✅ Loaded Inception V3 from Kaggle .h5 file: {config['path']}")
+                    logger.info(f"Model input shape: {model.input_shape}")
+                    logger.info(f"Model output shape: {model.output_shape}")
+                    
+                    # Verify model architecture matches Kaggle
+                    if model.input_shape[1:] == (128, 128, 3) and model.output_shape[1] == 4:
+                        logger.info("✅ Model architecture verified: (128,128,3) -> 4 classes")
+                    else:
+                        logger.warning(f"⚠️ Model shape mismatch: input {model.input_shape}, output {model.output_shape}")
                     
                 except Exception as load_error:
-                    logger.warning(f"Failed to load pre-trained model: {load_error}")
-                    logger.info("Creating new Inception V3 model from scratch")
+                    logger.error(f"❌ Failed to load Inception V3 from .h5 file: {load_error}")
+                    logger.info("🔄 Creating new Inception V3 model matching Kaggle architecture...")
                     
-                    # Create new model matching Kaggle architecture
+                    # Fallback: Create new model với kiến trúc Kaggle
                     inception_builder = InceptionV3AlzheimerModel(
                         num_classes=4, 
-                        input_size=(128, 128, 3)  # Match Kaggle
+                        input_size=(128, 128, 3)
                     )
-                    model_4class = inception_builder.get_model()
-                    
-                    # Convert to binary classifier
-                    model = InceptionV3Binary(inception_builder).get_model()
-                    logger.info("Created new Inception V3 binary classifier")
+                    model = inception_builder.get_model()
+                    logger.info("✅ Created new Inception V3 model with Kaggle architecture")
             else:
                 # Regular TensorFlow model loading
                 model = tf.keras.models.load_model(config["path"])
@@ -452,16 +457,19 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
                     logger.warning("TensorFlow not available, using standard preprocessing")
                     img_array = img_array.astype(np.float32) / 255.0
             elif preprocessing_type == "inception":
-                # Inception V3 preprocessing - MATCH Kaggle
-                # Kaggle uses 128x128 input size for Inception V3
+                # Inception V3 preprocessing - EXACT MATCH với Kaggle data preprocessing
+                # Kaggle data: (128, 128, 3) với giá trị pixel [0-255] 
+                # Inception V3 expects input range [-1, 1]
                 try:
-                    from tensorflow.keras.applications.inception_v3 import preprocess_input
-                    img_array = preprocess_input(img_array)
-                    logger.info("Applied Inception V3 specific preprocessing")
-                except ImportError:
-                    logger.warning("TensorFlow not available, using standard preprocessing")
-                    # Standard normalization: scale to [-1, 1] range (Inception V3 expects this)
-                    img_array = img_array.astype(np.float32) / 127.5 - 1.0
+                    # Kaggle preprocessing: normalize to [-1, 1] for Inception V3
+                    img_array = img_array.astype(np.float32)
+                    # Scale from [0, 255] to [-1, 1] - chuẩn Inception V3
+                    img_array = (img_array / 127.5) - 1.0
+                    logger.info("✅ Applied Kaggle-compatible Inception V3 preprocessing: [0,255] -> [-1,1]")
+                except Exception as e:
+                    logger.warning(f"Fallback preprocessing: {e}")
+                    # Fallback: standard normalization
+                    img_array = img_array.astype(np.float32) / 255.0
             else:
                 # Standard preprocessing
                 img_array = img_array.astype(np.float32) / 255.0
@@ -521,31 +529,95 @@ def predict_with_model(processed_image, model_name: str):
         logger.error(f"Error type: {type(e).__name__}")
         raise HTTPException(status_code=500, detail=f"Lỗi prediction: {str(e)}")
 
-def postprocess_prediction(prediction: np.ndarray) -> Dict[str, Any]:
-    """Xử lý kết quả prediction từ model"""
+def postprocess_prediction(prediction: np.ndarray, model_name: str = "cnn") -> Dict[str, Any]:
+    """Xử lý kết quả prediction từ model theo từng loại model"""
     try:
         # Lấy xác suất của từng class
         probabilities = prediction[0]
         
-        logger.info("probabilities: " + str(probabilities))
+        logger.info(f"Model: {model_name}, Raw probabilities: {probabilities}")
         
-        # Tìm class có xác suất cao nhất
-        predicted_class_idx = np.argmax(probabilities)
-        predicted_class = CLASS_NAMES[predicted_class_idx]
-        confidence = float(probabilities[predicted_class_idx]) * 100
-        
-        # Tạo response
-        result = {
-            "prediction": predicted_class,
-            "confidence": confidence,
-            "probability": {
-                CLASS_NAMES[0]: float(probabilities[0]) * 100,
-                CLASS_NAMES[1]: float(probabilities[1]) * 100,
-                CLASS_NAMES[2]: float(probabilities[2]) * 100,
-                CLASS_NAMES[3]: float(probabilities[3]) * 100,
-            },
-            "status": "success"
-        }
+        # Xử lý theo loại model
+        if model_name == "inception-v3":
+            # Inception V3: 4 classes trực tiếp từ Kaggle
+            # Classes: [MildDemented, ModerateDemented, NonDemented, VeryMildDemented]
+            if len(probabilities) == 4:
+                # Tìm class có xác suất cao nhất
+                predicted_class_idx = np.argmax(probabilities)
+                predicted_class = CLASS_NAMES[predicted_class_idx]
+                confidence = float(probabilities[predicted_class_idx]) * 100
+                
+                # Tạo response với 4 classes
+                result = {
+                    "prediction": predicted_class,
+                    "confidence": confidence,
+                    "probability": {
+                        CLASS_NAMES[0]: float(probabilities[0]) * 100,  # MildDemented
+                        CLASS_NAMES[1]: float(probabilities[1]) * 100,  # ModerateDemented  
+                        CLASS_NAMES[2]: float(probabilities[2]) * 100,  # NonDemented
+                        CLASS_NAMES[3]: float(probabilities[3]) * 100,  # VeryMildDemented
+                    },
+                    "status": "success",
+                    "model_type": "4-class_kaggle"
+                }
+                
+                # Thêm thông tin binary classification
+                # NonDemented = Normal, còn lại = Alzheimer variants
+                alzheimer_prob = probabilities[0] + probabilities[1] + probabilities[3]  # MildDemented + ModerateDemented + VeryMildDemented
+                normal_prob = probabilities[2]  # NonDemented
+                
+                result["binary_classification"] = {
+                    "alzheimer_variants": float(alzheimer_prob) * 100,
+                    "normal": float(normal_prob) * 100,
+                    "binary_prediction": "Normal" if normal_prob > alzheimer_prob else "Alzheimer"
+                }
+                
+                logger.info(f"✅ Inception V3 prediction: {predicted_class} ({confidence:.2f}%)")
+                return result
+            else:
+                logger.error(f"❌ Inception V3 expected 4 classes, got {len(probabilities)}")
+                raise ValueError(f"Inception V3 model should output 4 classes, got {len(probabilities)}")
+                
+        else:
+            # Các model khác (VGG16, ResNet50, etc.) - có thể là binary hoặc 4-class
+            if len(probabilities) == 2:
+                # Binary classification (Normal vs Alzheimer)
+                binary_classes = ["Normal", "Alzheimer"]
+                predicted_class_idx = np.argmax(probabilities)
+                predicted_class = binary_classes[predicted_class_idx]
+                confidence = float(probabilities[predicted_class_idx]) * 100
+                
+                result = {
+                    "prediction": predicted_class,
+                    "confidence": confidence,
+                    "probability": {
+                        "Normal": float(probabilities[0]) * 100,
+                        "Alzheimer": float(probabilities[1]) * 100,
+                    },
+                    "status": "success",
+                    "model_type": "binary"
+                }
+                
+            elif len(probabilities) == 4:
+                # 4-class classification
+                predicted_class_idx = np.argmax(probabilities)
+                predicted_class = CLASS_NAMES[predicted_class_idx]
+                confidence = float(probabilities[predicted_class_idx]) * 100
+                
+                result = {
+                    "prediction": predicted_class,
+                    "confidence": confidence,
+                    "probability": {
+                        CLASS_NAMES[0]: float(probabilities[0]) * 100,
+                        CLASS_NAMES[1]: float(probabilities[1]) * 100,
+                        CLASS_NAMES[2]: float(probabilities[2]) * 100,
+                        CLASS_NAMES[3]: float(probabilities[3]) * 100,
+                    },
+                    "status": "success",
+                    "model_type": "4-class"
+                }
+            else:
+                raise ValueError(f"Unsupported number of classes: {len(probabilities)}")
         
         return result
         
@@ -620,7 +692,7 @@ async def predict_alzheimer(file: UploadFile = File(...), model_name: str = "cnn
         prediction = predict_with_model(processed_image, model_name)
         
         # Xử lý kết quả
-        result = postprocess_prediction(prediction)
+        result = postprocess_prediction(prediction, model_name)
         result["model_used"] = model_name  # Thêm thông tin model đã sử dụng
         
         logger.info(f"Prediction completed: {result['prediction']} ({result['confidence']:.2f}%) using {model_name}")
@@ -654,7 +726,7 @@ async def predict_batch(files: list[UploadFile] = File(...), model_name: str = "
             image = Image.open(io.BytesIO(image_data))
             processed_image = preprocess_image(image, model_name)
             prediction = predict_with_model(processed_image, model_name)
-            result = postprocess_prediction(prediction)
+            result = postprocess_prediction(prediction, model_name)
             result["model_used"] = model_name
             
             results.append({

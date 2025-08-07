@@ -4,11 +4,30 @@ from fastapi.responses import JSONResponse
 import numpy as np
 from PIL import Image
 import io
-import tensorflow as tf
-# import torch  # Nếu bạn dùng PyTorch
 import uvicorn
 from typing import Dict, Any
 import logging
+
+# Cấu hình logging trước
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import với try-catch để tránh warnings
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+    logger.warning("TensorFlow not available")
+
+try:
+    import torch
+    import torch.nn as nn
+    import torchvision.transforms as transforms
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    logger.warning("PyTorch not available")
 
 # Khởi tạo FastAPI app
 app = FastAPI(
@@ -26,34 +45,190 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Cấu hình logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Global variables để lưu models
+models = {}  # Dictionary để lưu nhiều model
+current_model = None
 
-# Global variable để lưu model
-model = None
+# Cấu hình các model
+MODEL_CONFIGS = {
+    "cnn": {
+        "path": "models/cnn_model.h5",
+        "type": "tensorflow",
+        "input_size": (224, 224),
+        "preprocessing": "standard"
+    },
+    "resnet50": {
+        "path": "models/resnet50_model.h5", 
+        "type": "tensorflow",
+        "input_size": (224, 224),
+        "preprocessing": "resnet"
+    },
+    "vgg16": {
+        "path": "C:/Users/PC/Downloads/vgg16_finetuned.pth",
+        "type": "pytorch",
+        "input_size": (128, 128),  # Match Kaggle training
+        "preprocessing": "vgg"
+    },
+    "inception-v3": {
+        "path": "models/inception_v3_model.h5",
+        "type": "tensorflow", 
+        "input_size": (299, 299),
+        "preprocessing": "inception"
+    }
+}
 
-# Cấu hình model
-MODEL_PATH = "path/to/your/alzheimer_model.h5"  # Đường dẫn đến model của bạn
-IMG_SIZE = (224, 224)  # Kích thước ảnh input cho model
 CLASS_NAMES = ["Normal", "Alzheimer"]  # Tên các class
 
-def load_model():
-    """Load model AI đã train"""
-    global model
-    try:
-        # Với TensorFlow/Keras
-        model = tf.keras.models.load_model(MODEL_PATH)
-        logger.info(f"Model loaded successfully from {MODEL_PATH}")
+# Định nghĩa VGG16 model class cho PyTorch - MATCH với Kaggle notebook
+class VGG16AlzheimerModel(nn.Module):
+    def __init__(self, num_classes=4, pretrained=True, freeze_features=True):
+        super(VGG16AlzheimerModel, self).__init__()
+        from torchvision import models
+        self.vgg16 = models.vgg16(pretrained=pretrained)
         
-        # Với PyTorch (uncomment nếu dùng PyTorch)
-        # model = torch.load(MODEL_PATH, map_location='cpu')
-        # model.eval()
+        # Replace pooling with global pooling (match Kaggle)
+        self.vgg16.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        
+        # Optionally freeze all convolutional layers
+        if freeze_features:
+            for param in self.vgg16.features.parameters():
+                param.requires_grad = False
+        
+        # New classifier for 512→4096→4096→num_classes (match Kaggle exactly)
+        self.vgg16.classifier = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(512, 4096),
+            nn.ReLU(True),
+            nn.Dropout(0.5),
+            nn.Linear(4096, 4096),
+            nn.ReLU(True),
+            nn.Dropout(0.5),
+            nn.Linear(4096, num_classes)
+        )
+        self._init_classifier()
+
+    def _init_classifier(self):
+        for m in self.vgg16.classifier:
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        return self.vgg16(x)
+
+    def unfreeze_layers(self, num_layers=10):
+        params = list(self.vgg16.features.parameters())
+        for p in params[-num_layers:]: 
+            p.requires_grad = True
+        logger.info(f"Unfroze {num_layers} conv layers.")
+
+# Compatibility class for 2-class prediction (Alzheimer binary)
+class VGG16Binary(nn.Module):
+    def __init__(self, pretrained_4class_model):
+        super(VGG16Binary, self).__init__()
+        self.vgg16 = pretrained_4class_model.vgg16
+        
+        # Replace final layer: 4096 -> 2 classes instead of 4
+        self.vgg16.classifier[-1] = nn.Linear(4096, 2)
+        
+        # Initialize new final layer
+        nn.init.normal_(self.vgg16.classifier[-1].weight, 0, 0.01)
+        nn.init.constant_(self.vgg16.classifier[-1].bias, 0)
+    
+    def forward(self, x):
+        return self.vgg16(x)
+
+def load_model(model_name: str = "cnn"):
+    """Load model AI đã train"""
+    global models, current_model
+    
+    if model_name not in MODEL_CONFIGS:
+        logger.error(f"Model {model_name} không tồn tại trong cấu hình")
+        return False
+    
+    config = MODEL_CONFIGS[model_name]
+    
+    try:
+        # Kiểm tra file có tồn tại không
+        import os
+        if not os.path.exists(config["path"]):
+            raise FileNotFoundError(f"Model file không tồn tại: {config['path']}")
+        
+        if config["type"] == "tensorflow":
+            if not TF_AVAILABLE:
+                raise ImportError("TensorFlow không có sẵn")
+            # Load TensorFlow/Keras model
+            model = tf.keras.models.load_model(config["path"])
+            logger.info(f"TensorFlow model {model_name} loaded successfully from {config['path']}")
+            
+        elif config["type"] == "pytorch":
+            if not TORCH_AVAILABLE:
+                raise ImportError("PyTorch không có sẵn")
+            # Load PyTorch model (VGG16)
+            if model_name == "vgg16":
+                try:
+                    checkpoint = torch.load(config["path"], map_location='cpu')
+                    logger.info(f"Checkpoint keys: {list(checkpoint.keys()) if isinstance(checkpoint, dict) else 'Direct model'}")
+                    
+                    # Load 4-class model first (match Kaggle training)
+                    try:
+                        model_4class = VGG16AlzheimerModel(num_classes=4, pretrained=False, freeze_features=False)
+                        
+                        if isinstance(checkpoint, dict):
+                            if 'model_state_dict' in checkpoint:
+                                state_dict = checkpoint['model_state_dict']
+                            else:
+                                state_dict = checkpoint
+                            
+                            # Remove 'module.' prefix nếu có
+                            if any(key.startswith('module.') for key in state_dict.keys()):
+                                state_dict = {key[7:]: value for key, value in state_dict.items()}
+                            
+                            model_4class.load_state_dict(state_dict, strict=True)
+                            logger.info("Loaded 4-class VGG16 from checkpoint")
+                        else:
+                            model_4class = checkpoint
+                        
+                        # Convert to binary classifier (Normal vs Alzheimer)
+                        model = VGG16Binary(model_4class)
+                        logger.info("Created binary classifier from 4-class model")
+                        
+                        # Map 4 classes to 2: [MildDemented, ModerateDemented, NonDemented, VeryMildDemented] -> [Alzheimer, Normal]
+                        # Classes 0,1,3 = Alzheimer variants -> class 1
+                        # Class 2 = NonDemented -> class 0 (Normal)
+                        
+                    except Exception as e1:
+                        logger.error(f"Failed to load as 4-class model: {e1}")
+                        raise e1
+                    
+                    model.eval()
+                    logger.info(f"PyTorch VGG16 model loaded successfully")
+                        
+                except Exception as load_error:
+                    logger.error(f"Error loading VGG16: {str(load_error)}")
+                    raise load_error
+                        
+            else:
+                raise Exception(f"PyTorch model {model_name} chưa được implement")
+        
+        models[model_name] = {
+            "model": model,
+            "config": config
+        }
+        current_model = model_name
+        return True
         
     except Exception as e:
-        logger.error(f"Error loading model: {str(e)}")
+        logger.error(f"Error loading model {model_name}: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
+        
         # Tạo mock model cho demo
-        model = create_mock_model()
+        models[model_name] = {
+            "model": create_mock_model(),
+            "config": config
+        }
+        current_model = model_name
+        return False
 
 def create_mock_model():
     """Tạo mock model cho demo khi không có model thật"""
@@ -62,39 +237,136 @@ def create_mock_model():
     class MockModel:
         def predict(self, x):
             # Tạo kết quả random để demo
-            batch_size = x.shape[0]
+            if isinstance(x, torch.Tensor):
+                batch_size = x.shape[0]
+            else:
+                batch_size = x.shape[0]
+            
             # Random prediction với xác suất nghiêng về Normal (80%)
             predictions = np.random.random((batch_size, 2))
             predictions[:, 0] = predictions[:, 0] * 0.8 + 0.1  # Normal: 10-90%
             predictions[:, 1] = 1 - predictions[:, 0]  # Alzheimer: phần còn lại
             return predictions
+        
+        def __call__(self, x):
+            # Để hỗ trợ PyTorch-style calling
+            return torch.tensor(self.predict(x), dtype=torch.float32)
+        
+        def eval(self):
+            # Để hỗ trợ PyTorch eval mode
+            return self
     
     return MockModel()
 
-def preprocess_image(image: Image.Image) -> np.ndarray:
+def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
     """Tiền xử lý ảnh để đưa vào model"""
     try:
+        config = MODEL_CONFIGS[model_name]
+        input_size = config["input_size"]
+        preprocessing_type = config["preprocessing"]
+        
         # Chuyển sang RGB nếu cần
         if image.mode != 'RGB':
             image = image.convert('RGB')
         
         # Resize ảnh về kích thước model yêu cầu
-        image = image.resize(IMG_SIZE)
+        image = image.resize(input_size)
         
-        # Chuyển thành numpy array
-        img_array = np.array(image)
+        if config["type"] == "pytorch":
+            # PyTorch preprocessing (VGG16) - MATCH Kaggle notebook
+            if preprocessing_type == "vgg":
+                # Kaggle notebook preprocessing: grayscale->3ch, resize 128, ImageNet normalize
+                transform = transforms.Compose([
+                    transforms.Resize((128, 128)),  # Match Kaggle: 128x128
+                    transforms.Grayscale(num_output_channels=3),  # Convert to 3-channel
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                                       std=[0.229, 0.224, 0.225])  # ImageNet normalization
+                ])
+                # Apply transform directly to PIL Image
+                img_tensor = transform(image)
+                img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
+                return img_tensor
         
-        # Normalize pixel values về [0,1]
-        img_array = img_array.astype(np.float32) / 255.0
-        
-        # Thêm batch dimension
-        img_array = np.expand_dims(img_array, axis=0)
-        
-        return img_array
+        elif config["type"] == "tensorflow":
+            # TensorFlow preprocessing
+            # Chuyển thành numpy array
+            img_array = np.array(image)
+            
+            if preprocessing_type == "resnet":
+                # ResNet preprocessing
+                try:
+                    from tensorflow.keras.applications.resnet50 import preprocess_input
+                    img_array = preprocess_input(img_array)
+                except ImportError:
+                    logger.warning("TensorFlow not available, using standard preprocessing")
+                    img_array = img_array.astype(np.float32) / 255.0
+            elif preprocessing_type == "inception":
+                # Inception preprocessing  
+                try:
+                    from tensorflow.keras.applications.inception_v3 import preprocess_input
+                    img_array = preprocess_input(img_array)
+                except ImportError:
+                    logger.warning("TensorFlow not available, using standard preprocessing")
+                    img_array = img_array.astype(np.float32) / 255.0
+            else:
+                # Standard preprocessing
+                img_array = img_array.astype(np.float32) / 255.0
+            
+            # Thêm batch dimension
+            img_array = np.expand_dims(img_array, axis=0)
+            return img_array
         
     except Exception as e:
         logger.error(f"Error preprocessing image: {str(e)}")
         raise HTTPException(status_code=400, detail="Không thể xử lý ảnh")
+
+def predict_with_model(processed_image, model_name: str):
+    """Thực hiện prediction với model được chọn"""
+    if model_name not in models:
+        raise HTTPException(status_code=400, detail=f"Model {model_name} chưa được load")
+    
+    model_info = models[model_name]
+    model = model_info["model"]
+    config = model_info["config"]
+    
+    try:
+        if config["type"] == "tensorflow":
+            # TensorFlow prediction
+            prediction = model.predict(processed_image)
+            return prediction
+        
+        elif config["type"] == "pytorch":
+            # PyTorch prediction
+            with torch.no_grad():
+                if isinstance(processed_image, torch.Tensor):
+                    logger.info(f"Input tensor shape: {processed_image.shape}")
+                    logger.info(f"Input tensor min/max: {processed_image.min():.3f}/{processed_image.max():.3f}")
+                    
+                    prediction = model(processed_image)
+                    logger.info(f"Raw prediction: {prediction}")
+                    logger.info(f"Raw prediction shape: {prediction.shape}")
+                    
+                    # Apply softmax if needed
+                    if not torch.allclose(prediction.sum(dim=1), torch.ones(prediction.shape[0]), atol=1e-5):
+                        prediction = torch.softmax(prediction, dim=1)
+                        logger.info("Applied softmax to raw predictions")
+                    
+                    prediction = prediction.cpu().numpy()
+                    logger.info(f"Final prediction after softmax: {prediction}")
+                    
+                    # For VGG16: model outputs 2 classes directly (Normal, Alzheimer)
+                    return prediction
+                else:
+                    raise ValueError("PyTorch model requires tensor input")
+        
+        else:
+            raise ValueError(f"Unsupported model type: {config['type']}")
+            
+    except Exception as e:
+        logger.error(f"Error in predict_with_model for {model_name}: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
+        raise HTTPException(status_code=500, detail=f"Lỗi prediction: {str(e)}")
 
 def postprocess_prediction(prediction: np.ndarray) -> Dict[str, Any]:
     """Xử lý kết quả prediction từ model"""
@@ -126,9 +398,10 @@ def postprocess_prediction(prediction: np.ndarray) -> Dict[str, Any]:
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model khi khởi động server"""
+    """Load models khi khởi động server"""
     logger.info("Starting Alzheimer Prediction API...")
-    load_model()
+    # Load default model (CNN) at startup
+    load_model("cnn")
 
 @app.get("/")
 async def root():
@@ -136,7 +409,8 @@ async def root():
     return {
         "message": "Alzheimer Prediction API is running",
         "status": "healthy",
-        "model_loaded": model is not None
+        "models_loaded": list(models.keys()),
+        "available_models": list(MODEL_CONFIGS.keys())
     }
 
 @app.get("/health")
@@ -144,25 +418,30 @@ async def health_check():
     """Detailed health check"""
     return {
         "status": "healthy",
-        "model_status": "loaded" if model is not None else "not_loaded",
+        "models_loaded": list(models.keys()),
+        "available_models": list(MODEL_CONFIGS.keys()),
         "api_version": "1.0.0"
     }
 
 @app.post("/predict")
-async def predict_alzheimer(file: UploadFile = File(...)):
+async def predict_alzheimer(file: UploadFile = File(...), model_name: str = "cnn"):
     """
     API endpoint dự đoán bệnh Alzheimer từ ảnh
     
     Args:
         file: UploadFile - File ảnh được upload
+        model_name: str - Tên model muốn sử dụng (cnn, resnet50, vgg16, inception-v3)
     
     Returns:
         JSON response với kết quả dự đoán
     """
     try:
-        # Kiểm tra model đã load chưa
-        if model is None:
-            raise HTTPException(status_code=500, detail="Model chưa được load")
+        # Load model nếu chưa được load
+        if model_name not in models:
+            logger.info(f"Loading model {model_name}...")
+            success = load_model(model_name)
+            if not success:
+                logger.warning(f"Failed to load {model_name}, using mock model")
         
         # Kiểm tra file type
         if not file.content_type.startswith('image/'):
@@ -172,21 +451,22 @@ async def predict_alzheimer(file: UploadFile = File(...)):
             )
         
         # Đọc và xử lý ảnh
-        logger.info(f"Processing image: {file.filename}")
+        logger.info(f"Processing image: {file.filename} with model: {model_name}")
         image_data = await file.read()
         image = Image.open(io.BytesIO(image_data))
         
-        # Tiền xử lý ảnh
-        processed_image = preprocess_image(image)
+        # Tiền xử lý ảnh theo model
+        processed_image = preprocess_image(image, model_name)
         
         # Dự đoán với model
         logger.info("Making prediction...")
-        prediction = model.predict(processed_image)
+        prediction = predict_with_model(processed_image, model_name)
         
         # Xử lý kết quả
         result = postprocess_prediction(prediction)
+        result["model_used"] = model_name  # Thêm thông tin model đã sử dụng
         
-        logger.info(f"Prediction completed: {result['prediction']} ({result['confidence']:.2f}%)")
+        logger.info(f"Prediction completed: {result['prediction']} ({result['confidence']:.2f}%) using {model_name}")
         
         return JSONResponse(content=result)
         
@@ -197,12 +477,16 @@ async def predict_alzheimer(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Lỗi server nội bộ")
 
 @app.post("/predict-batch")
-async def predict_batch(files: list[UploadFile] = File(...)):
+async def predict_batch(files: list[UploadFile] = File(...), model_name: str = "cnn"):
     """
     API endpoint dự đoán nhiều ảnh cùng lúc
     """
     if len(files) > 10:  # Giới hạn số lượng file
         raise HTTPException(status_code=400, detail="Tối đa 10 file mỗi lần")
+    
+    # Load model nếu chưa được load
+    if model_name not in models:
+        load_model(model_name)
     
     results = []
     
@@ -211,9 +495,10 @@ async def predict_batch(files: list[UploadFile] = File(...)):
             # Xử lý từng file
             image_data = await file.read()
             image = Image.open(io.BytesIO(image_data))
-            processed_image = preprocess_image(image)
-            prediction = model.predict(processed_image)
+            processed_image = preprocess_image(image, model_name)
+            prediction = predict_with_model(processed_image, model_name)
             result = postprocess_prediction(prediction)
+            result["model_used"] = model_name
             
             results.append({
                 "filename": file.filename,
@@ -230,12 +515,11 @@ async def predict_batch(files: list[UploadFile] = File(...)):
 
 @app.get("/model-info")
 async def get_model_info():
-    """Thông tin về model"""
+    """Thông tin về các model"""
     return {
-        "model_path": MODEL_PATH,
-        "input_size": IMG_SIZE,
-        "classes": CLASS_NAMES,
-        "model_loaded": model is not None
+        "available_models": MODEL_CONFIGS,
+        "loaded_models": list(models.keys()),
+        "classes": CLASS_NAMES
     }
 
 if __name__ == "__main__":

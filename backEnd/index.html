@@ -26,7 +26,7 @@
             border-radius: 20px;
             padding: 40px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
-            max-width: 600px;
+            max-width: 700px;
             width: 100%;
             text-align: center;
             backdrop-filter: blur(10px);
@@ -139,9 +139,19 @@
             border: 2px solid #4ecdc4;
         }
 
-        .result-alzheimer {
-            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
-            border: 2px solid #ff6b6b;
+        .result-mild {
+            background: linear-gradient(135deg, #ffeaa7 0%, #fab1a0 100%);
+            border: 2px solid #fdcb6e;
+        }
+
+        .result-moderate {
+            background: linear-gradient(135deg, #fd79a8 0%, #fdcb6e 100%);
+            border: 2px solid #e84393;
+        }
+
+        .result-severe {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            border: 2px solid #d63031;
         }
 
         .result-title {
@@ -152,13 +162,66 @@
 
         .result-confidence {
             font-size: 1.2em;
-            margin-bottom: 10px;
+            margin-bottom: 15px;
+            font-weight: bold;
         }
 
         .result-description {
             font-size: 1em;
             line-height: 1.6;
             color: #555;
+            margin-bottom: 20px;
+        }
+
+        .probabilities-container {
+            background: rgba(255, 255, 255, 0.3);
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: left;
+        }
+
+        .probabilities-title {
+            font-size: 1.1em;
+            font-weight: bold;
+            margin-bottom: 15px;
+            text-align: center;
+            color: #333;
+        }
+
+        .probability-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 8px 0;
+        }
+
+        .probability-label {
+            font-weight: 500;
+            color: #555;
+        }
+
+        .probability-bar {
+            width: 200px;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 10px;
+            margin: 0 15px;
+            overflow: hidden;
+            margin-left: auto;
+        }
+
+        .probability-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.5s ease;
+        }
+
+        .probability-value {
+            font-weight: bold;
+            color: #333;
+            min-width: 50px;
         }
 
         .loading {
@@ -221,14 +284,21 @@
             .upload-area {
                 padding: 30px 15px;
             }
+
+            .probability-item {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>🧠 Demo Dự Đoán Alzheimer</h1>
-            <p>Tải lên ảnh chụp não để phân tích và dự đoán nguy cơ bệnh Alzheimer</p>
+            <h1>🧠 Demo Dự Đoán Bệnh Alzheimer</h1>
+            <p>Tải lên ảnh chụp não để phân tích và dự đoán mức độ bệnh Alzheimer</p>
         </div>
 
         <div class="upload-area" id="uploadArea">
@@ -251,15 +321,17 @@
         </div>
 
         <div class="error" id="error"></div>
-		<div style="margin: 20px 0;">
-			<label for="modelSelect" style="font-weight: bold; color: #555;">Chọn mô hình dự đoán:</label>
-			<select id="modelSelect" class="btn" style="min-width: auto; padding: 10px 20px; color: #555">
-				<option value="cnn">CNN</option>
-				<option value="resnet50">Resnet50</option>
-				<option value="vgg16">VGG16</option>
-				<option value="inception-v3">Inception V3</option>
-			</select>
-		</div>
+
+        <div style="margin: 20px 0;">
+            <label for="modelSelect" style="font-weight: bold; color: #555;">Chọn mô hình dự đoán:</label>
+            <select id="modelSelect" class="btn" style="min-width: auto; padding: 10px 20px; color: #555">
+                <option value="resnet50">ResNet50</option>
+                <option value="cnn">CNN</option>
+                <option value="vgg16">VGG16</option>
+                <option value="inception-v3">Inception V3</option>
+            </select>
+        </div>
+
         <div>
             <button class="btn" id="predictBtn" disabled>🔍 Dự Đoán</button>
             <button class="btn" id="resetBtn">🔄 Tải Ảnh Mới</button>
@@ -269,6 +341,11 @@
             <div class="result-title" id="resultTitle"></div>
             <div class="result-confidence" id="resultConfidence"></div>
             <div class="result-description" id="resultDescription"></div>
+            
+            <div class="probabilities-container">
+                <div class="probabilities-title">📊 Chi tiết xác suất từng mức độ:</div>
+                <div id="probabilitiesList"></div>
+            </div>
         </div>
     </div>
 
@@ -288,6 +365,38 @@
                 
                 this.selectedFile = null;
                 this.apiUrl = 'http://localhost:8000'; // URL của FastAPI server
+                
+                // Mapping classes to Vietnamese names and colors
+                this.classMapping = {
+                    'NonDemented': {
+                        name: 'Bình thường',
+                        description: 'Không có dấu hiệu suy giảm nhận thức',
+                        icon: '✅',
+                        class: 'result-normal',
+                        color: '#4ecdc4'
+                    },
+                    'VeryMildDemented': {
+                        name: 'Suy giảm nhận thức rất nhẹ',
+                        description: 'Có dấu hiệu suy giảm nhận thức ở mức độ rất nhẹ',
+                        icon: '⚠️',
+                        class: 'result-mild',
+                        color: '#fdcb6e'
+                    },
+                    'MildDemented': {
+                        name: 'Suy giảm nhận thức nhẹ',
+                        description: 'Có dấu hiệu suy giảm nhận thức ở mức độ nhẹ',
+                        icon: '🔸',
+                        class: 'result-mild',
+                        color: '#e17055'
+                    },
+                    'ModerateDemented': {
+                        name: 'Suy giảm nhận thức trung bình',
+                        description: 'Có dấu hiệu suy giảm nhận thức ở mức độ trung bình đến nặng',
+                        icon: '🔶',
+                        class: 'result-moderate',
+                        color: '#e84393'
+                    }
+                };
                 
                 this.initEventListeners();
             }
@@ -378,77 +487,116 @@
                 this.hideResult();
 
                 try {
-					const modelName = document.getElementById('modelSelect').value;
+                    const modelName = document.getElementById('modelSelect').value;
                     const formData = new FormData();
                     formData.append('file', this.selectedFile);
-					
+                    
                     // Simulate progress
                     this.showProgress();
                     await this.simulateProgress();
 
-                    const response = await fetch(`${this.apiUrl}/predict?model_name=${modelName}`, {
+                    const response = await fetch(`${this.apiUrl}/predict`, {
                         method: 'POST',
                         body: formData
                     });
 
                     if (!response.ok) {
-                        throw new Error(`Server error: ${response.status}`);
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.detail || `Server error: ${response.status}`);
                     }
 
                     const result = await response.json();
+                    console.log('API Result:', result);
                     this.displayResult(result);
 
                 } catch (error) {
                     console.error('Prediction error:', error);
-                    
-                    // Simulate result for demo purposes
-                    const mockResult = this.generateMockResult();
-                    this.displayResult(mockResult);
-                    
+                    this.showError(`Lỗi dự đoán: ${error.message}`);
                 } finally {
                     this.hideLoading();
                     this.hideProgress();
                 }
             }
 
-            generateMockResult() {
-                // Generate random result for demo
-                const isAlzheimer = Math.random() > 0.6;
-                const confidence = (Math.random() * 0.3 + 0.7) * 100; // 70-100%
-                
-                return {
-                    prediction: isAlzheimer ? 'Alzheimer' : 'Normal',
-                    confidence: confidence,
-                    probability: {
-                        alzheimer: isAlzheimer ? confidence : 100 - confidence,
-                        normal: isAlzheimer ? 100 - confidence : confidence
-                    }
-                };
-            }
-
             displayResult(result) {
-                const isAlzheimer = result.prediction.toLowerCase() === 'alzheimer';
+                const prediction = result.prediction;
                 const confidence = Math.round(result.confidence);
+                const probabilities = result.probability || {};
+
+                // Get class information
+                const classInfo = this.classMapping[prediction] || {
+                    name: prediction,
+                    description: 'Kết quả dự đoán',
+                    icon: '🔍',
+                    class: 'result-normal',
+                    color: '#667eea'
+                };
 
                 // Set result styling
-                this.resultContainer.className = `result-container ${isAlzheimer ? 'result-alzheimer' : 'result-normal'}`;
+                this.resultContainer.className = `result-container ${classInfo.class}`;
 
-                // Set content
+                // Set main result content
                 document.getElementById('resultTitle').textContent = 
-                    isAlzheimer ? '⚠️ Nguy cơ Alzheimer được phát hiện' : '✅ Không phát hiện dấu hiệu Alzheimer';
+                    `${classInfo.icon} ${classInfo.name}`;
 
                 document.getElementById('resultConfidence').textContent = 
                     `Độ tin cậy: ${confidence}%`;
 
-                const description = isAlzheimer 
-                    ? `Mô hình AI đã phát hiện các dấu hiệu có thể liên quan đến bệnh Alzheimer với độ tin cậy ${confidence}%. Khuyến nghị thăm khám bác sĩ chuyên khoa để được tư vấn và kiểm tra chi tiết hơn.`
-                    : `Mô hình AI không phát hiện dấu hiệu bất thường liên quan đến bệnh Alzheimer với độ tin cậy ${confidence}%. Tuy nhiên, kết quả này chỉ mang tính tham khảo và không thay thế cho chẩn đoán y khoa.`;
+                // Set description based on severity
+                let description = `Mô hình AI đã phân tích ảnh não và dự đoán: "${classInfo.description}" với độ tin cậy ${confidence}%. `;
+                
+                if (prediction === 'NonDemented') {
+                    description += 'Kết quả cho thấy không có dấu hiệu bất thường liên quan đến suy giảm nhận thức.';
+                } else {
+                    description += 'Khuyến nghị thăm khám bác sĩ chuyên khoa thần kinh để được tư vấn và kiểm tra chi tiết hơn.';
+                }
+                
+                description += ' Lưu ý: Kết quả này chỉ mang tính tham khảo và không thay thế cho chẩn đoán y khoa chuyên nghiệp.';
 
                 document.getElementById('resultDescription').textContent = description;
+
+                // Display probabilities
+                this.displayProbabilities(probabilities);
 
                 // Show result
                 this.resultContainer.style.display = 'block';
                 this.resultContainer.scrollIntoView({ behavior: 'smooth' });
+            }
+
+            displayProbabilities(probabilities) {
+                const probabilitiesList = document.getElementById('probabilitiesList');
+                probabilitiesList.innerHTML = '';
+
+                // Sort classes by probability (highest first)
+                const sortedClasses = Object.entries(probabilities)
+                    .sort(([,a], [,b]) => b - a);
+
+                sortedClasses.forEach(([className, probability]) => {
+                    // Convert class name to match backend format
+                    let backendClassName = className;
+                    if (className === 'milddemented') backendClassName = 'MildDemented';
+                    else if (className === 'moderatedemented') backendClassName = 'ModerateDemented';
+                    else if (className === 'nondemented') backendClassName = 'NonDemented';
+                    else if (className === 'verymilddemented') backendClassName = 'VeryMildDemented';
+
+                    const classInfo = this.classMapping[backendClassName] || {
+                        name: className,
+                        color: '#667eea'
+                    };
+
+                    const probabilityItem = document.createElement('div');
+                    probabilityItem.className = 'probability-item';
+                    
+                    probabilityItem.innerHTML = `
+                        <div class="probability-label">${classInfo.name} </div>
+                        <div class="probability-bar">
+                            <div class="probability-fill" style="width: ${probability}%; background: ${classInfo.color};"></div>
+                        </div>
+                        <div class="probability-value">${probability.toFixed(1)}%</div>
+                    `;
+                    
+                    probabilitiesList.appendChild(probabilityItem);
+                });
             }
 
             showLoading() {

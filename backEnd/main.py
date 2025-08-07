@@ -58,7 +58,7 @@ MODEL_CONFIGS = {
     "cnn": {
         "path": "models/cnn_model.h5",
         "type": "tensorflow",
-        "input_size": (224, 224),
+        "input_size": (128, 128),  # Match Kaggle: 128x128
         "preprocessing": "standard"
     },
     "resnet50": {
@@ -82,6 +82,127 @@ MODEL_CONFIGS = {
 }
 
 CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
+
+# CNN Model class cho TensorFlow - MATCH với Kaggle notebook CHÍNH XÁC
+class CNNAlzheimerModel:
+    """
+    CNN model for Alzheimer prediction matching Kaggle implementation EXACTLY
+    Kaggle architecture:
+    - Input: (128, 128, 3)
+    - Conv2D(16) -> BN -> ReLU -> Conv2D(16) -> BN -> ReLU -> MaxPool
+    - Conv blocks: 32, 64, 128, Dropout(0.2), 256, Dropout(0.2)
+    - Flatten -> Dense blocks: 512(0.7), 128(0.5), 64(0.3) -> Dense(4, softmax)
+    """
+    def __init__(self, num_classes=4, input_size=(128, 128, 3), activation='relu'):
+        if not TF_AVAILABLE:
+            raise ImportError("TensorFlow is required for CNN model")
+        
+        self.num_classes = num_classes
+        self.input_size = input_size
+        self.activation = activation
+        self.model = None
+        self._build_model()
+    
+    def conv_block(self, filters, act='relu'):
+        """Conv block - EXACT MATCH với Kaggle"""
+        from tensorflow.keras import Sequential, layers
+        
+        block = Sequential([
+            layers.Conv2D(filters, 3, padding='same', kernel_initializer='he_normal'),
+            layers.BatchNormalization(),
+            layers.Activation(act),
+            
+            layers.Conv2D(filters, 3, padding='same', kernel_initializer='he_normal'),
+            layers.BatchNormalization(),
+            layers.Activation(act),
+            
+            layers.MaxPooling2D(pool_size=(2, 2))
+        ])
+        
+        return block
+    
+    def dense_block(self, units, dropout_rate, act='relu'):
+        """Dense block - EXACT MATCH với Kaggle"""
+        from tensorflow.keras import Sequential, layers
+        
+        block = Sequential([
+            layers.Dense(units, kernel_initializer='he_normal'),
+            layers.BatchNormalization(),
+            layers.Activation(act),
+            layers.Dropout(dropout_rate)
+        ])
+        
+        return block
+    
+    def _build_model(self):
+        """Build CNN model EXACTLY matching Kaggle notebook"""
+        try:
+            from tensorflow.keras import Sequential, layers
+            import tensorflow as tf
+            
+            # IMAGE_SIZE = [128, 128] - EXACT MATCH với Kaggle
+            IMAGE_SIZE = [128, 128]
+            
+            # Construct model - EXACT MATCH với Kaggle construct_model function
+            model = Sequential([
+                layers.Input(shape=(*IMAGE_SIZE, 3)),
+
+                # Initial conv layers
+                layers.Conv2D(16, 3, padding='same', kernel_initializer='he_normal'),
+                layers.BatchNormalization(),
+                layers.Activation(self.activation),
+
+                layers.Conv2D(16, 3, padding='same', kernel_initializer='he_normal'),
+                layers.BatchNormalization(),
+                layers.Activation(self.activation),
+                layers.MaxPooling2D(),
+
+                # Conv blocks - EXACT sequence từ Kaggle
+                self.conv_block(32, act=self.activation),
+                self.conv_block(64, act=self.activation),
+                self.conv_block(128, act=self.activation),
+                layers.Dropout(0.2),
+                self.conv_block(256, act=self.activation),
+                layers.Dropout(0.2),
+
+                # Dense layers
+                layers.Flatten(),
+                self.dense_block(512, 0.7, act=self.activation),
+                self.dense_block(128, 0.5, act=self.activation),
+                self.dense_block(64, 0.3, act=self.activation),
+
+                # Output layer cho 4 classes
+                layers.Dense(4, activation='softmax')
+            ], name="cnn_model")
+            
+            self.model = model
+            
+            # Compile model - MATCH Kaggle
+            self.model.compile(
+                optimizer='adam',
+                loss='categorical_crossentropy',  # For 4-class categorical labels
+                metrics=['accuracy']
+            )
+            
+            logger.info("CNN model built successfully - EXACT Kaggle match")
+            logger.info(f"Model input shape: {self.model.input_shape}")
+            logger.info(f"Model output shape: {self.model.output_shape}")
+            logger.info("Architecture: Conv(16x2)->MaxPool->Conv(32,64,128)->Dropout->Conv(256)->Dropout->Flatten->Dense(512,128,64)->Dense(4)")
+            
+        except Exception as e:
+            logger.error(f"Error building CNN model: {str(e)}")
+            raise e
+    
+    def get_model(self):
+        """Return the compiled model"""
+        return self.model
+    
+    def predict(self, x):
+        """Prediction method"""
+        if self.model:
+            return self.model.predict(x)
+        else:
+            raise ValueError("Model not built yet")
 
 # Định nghĩa VGG16 model class cho PyTorch - MATCH với Kaggle notebook
 class VGG16AlzheimerModel(nn.Module):
@@ -281,8 +402,35 @@ def load_model(model_name: str = "cnn"):
             if not TF_AVAILABLE:
                 raise ImportError("TensorFlow không có sẵn")
             
+            # Special handling for CNN - LOAD từ file .h5 Kaggle
+            if model_name == "cnn":
+                try:
+                    # Load model trực tiếp từ file .h5 (Kaggle exported model)
+                    model = tf.keras.models.load_model(config["path"])
+                    logger.info(f"✅ Loaded CNN from Kaggle .h5 file: {config['path']}")
+                    logger.info(f"Model input shape: {model.input_shape}")
+                    logger.info(f"Model output shape: {model.output_shape}")
+                    
+                    # Verify model architecture matches Kaggle
+                    if model.input_shape[1:] == (128, 128, 3) and model.output_shape[1] == 4:
+                        logger.info("✅ Model architecture verified: (128,128,3) -> 4 classes")
+                    else:
+                        logger.warning(f"⚠️ Model shape mismatch: input {model.input_shape}, output {model.output_shape}")
+                    
+                except Exception as load_error:
+                    logger.error(f"❌ Failed to load CNN from .h5 file: {load_error}")
+                    logger.info("🔄 Creating new CNN model matching Kaggle architecture...")
+                    
+                    # Fallback: Create new model với kiến trúc Kaggle
+                    cnn_builder = CNNAlzheimerModel(
+                        num_classes=4, 
+                        input_size=(128, 128, 3),
+                        activation='relu'
+                    )
+                    model = cnn_builder.get_model()
+                    logger.info("✅ Created new CNN model with Kaggle architecture")
             # Special handling for Inception V3 - LOAD từ file .h5 Kaggle
-            if model_name == "inception-v3":
+            elif model_name == "inception-v3":
                 try:
                     # Load model trực tiếp từ file .h5 (Kaggle exported model)
                     model = tf.keras.models.load_model(config["path"])
@@ -448,7 +596,17 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
             # Chuyển thành numpy array
             img_array = np.array(image)
             
-            if preprocessing_type == "resnet":
+            if preprocessing_type == "standard":
+                # CNN preprocessing - EXACT MATCH với Kaggle data preprocessing
+                # Kaggle data: (128, 128, 3) với giá trị pixel [0-255] normalize về [0,1]
+                try:
+                    # Standard normalization like Kaggle CNN training
+                    img_array = img_array.astype(np.float32) / 255.0
+                    logger.info("✅ Applied Kaggle-compatible CNN preprocessing: [0,255] -> [0,1]")
+                except Exception as e:
+                    logger.warning(f"Fallback preprocessing: {e}")
+                    img_array = img_array.astype(np.float32) / 255.0
+            elif preprocessing_type == "resnet":
                 # ResNet preprocessing
                 try:
                     from tensorflow.keras.applications.resnet50 import preprocess_input
@@ -538,7 +696,47 @@ def postprocess_prediction(prediction: np.ndarray, model_name: str = "cnn") -> D
         logger.info(f"Model: {model_name}, Raw probabilities: {probabilities}")
         
         # Xử lý theo loại model
-        if model_name == "inception-v3":
+        if model_name == "cnn":
+            # CNN: 4 classes trực tiếp từ Kaggle
+            # Classes: [MildDemented, ModerateDemented, NonDemented, VeryMildDemented]
+            if len(probabilities) == 4:
+                # Tìm class có xác suất cao nhất
+                predicted_class_idx = np.argmax(probabilities)
+                predicted_class = CLASS_NAMES[predicted_class_idx]
+                confidence = float(probabilities[predicted_class_idx]) * 100
+                
+                # Tạo response với 4 classes
+                result = {
+                    "prediction": predicted_class,
+                    "confidence": confidence,
+                    "probability": {
+                        CLASS_NAMES[0]: float(probabilities[0]) * 100,  # MildDemented
+                        CLASS_NAMES[1]: float(probabilities[1]) * 100,  # ModerateDemented  
+                        CLASS_NAMES[2]: float(probabilities[2]) * 100,  # NonDemented
+                        CLASS_NAMES[3]: float(probabilities[3]) * 100,  # VeryMildDemented
+                    },
+                    "status": "success",
+                    "model_type": "4-class_kaggle_cnn"
+                }
+                
+                # Thêm thông tin binary classification
+                # NonDemented = Normal, còn lại = Alzheimer variants
+                alzheimer_prob = probabilities[0] + probabilities[1] + probabilities[3]  # MildDemented + ModerateDemented + VeryMildDemented
+                normal_prob = probabilities[2]  # NonDemented
+                
+                result["binary_classification"] = {
+                    "alzheimer_variants": float(alzheimer_prob) * 100,
+                    "normal": float(normal_prob) * 100,
+                    "binary_prediction": "Normal" if normal_prob > alzheimer_prob else "Alzheimer"
+                }
+                
+                logger.info(f"✅ CNN prediction: {predicted_class} ({confidence:.2f}%)")
+                return result
+            else:
+                logger.error(f"❌ CNN expected 4 classes, got {len(probabilities)}")
+                raise ValueError(f"CNN model should output 4 classes, got {len(probabilities)}")
+                
+        elif model_name == "inception-v3":
             # Inception V3: 4 classes trực tiếp từ Kaggle
             # Classes: [MildDemented, ModerateDemented, NonDemented, VeryMildDemented]
             if len(probabilities) == 4:

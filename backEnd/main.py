@@ -7,7 +7,7 @@ import io
 import uvicorn
 from typing import Dict, Any
 import logging
-import torchvision.models as models
+import torchvision.models as torch_models
 
 # Cấu hình logging trước
 logging.basicConfig(level=logging.INFO)
@@ -50,7 +50,7 @@ app.add_middleware(
 )
 
 # Global variables để lưu models
-models = {}  # Dictionary để lưu nhiều model
+loaded_models = {}  # Dictionary để lưu nhiều model
 current_model = None
 
 # Cấu hình các model
@@ -63,7 +63,7 @@ MODEL_CONFIGS = {
     },
     "resnet50": {
         "path": "models/resnet50-aug.pth", 
-        "type": "tensorflow",
+        "type": "pytorch",
         "input_size": (128, 128),
         "preprocessing": "resnet"
     },
@@ -263,12 +263,12 @@ class InceptionV3Binary:
 
 def load_model(model_name: str = "cnn"):
     """Load model AI đã train"""
-    global models, current_model
+    global loaded_models, current_model
     
     if model_name not in MODEL_CONFIGS:
         logger.error(f"Model {model_name} không tồn tại trong cấu hình")
         return False
-    
+
     config = MODEL_CONFIGS[model_name]
     
     try:
@@ -354,7 +354,7 @@ def load_model(model_name: str = "cnn"):
                     logger.error(f"Error loading VGG16: {str(load_error)}")
                     raise load_error
             elif model_name == "resnet50":
-                model = models.resnet50(weights=None)  # Không load pretrained weights
+                model = torch_models.resnet50(weights=None)  # Không load pretrained weights
                 model.fc = nn.Identity()
                 model.fc = nn.Sequential(
                     nn.Dropout(p=0.3),                   # dropout_0
@@ -378,13 +378,15 @@ def load_model(model_name: str = "cnn"):
                     nn.Linear(256, 4)          # dense_3 (output)
                 )
                 
+                logger.info('load params for resnet50')
                 model.load_state_dict(torch.load(MODEL_CONFIGS["resnet50"]["path"], map_location=device))
+                logger.info('load resnet50 ok')
                 model.to(device)
                 model.eval()
             else:
                 raise Exception(f"PyTorch model {model_name} chưa được implement")
         
-        models[model_name] = {
+        loaded_models[model_name] = {
             "model": model,
             "config": config
         }
@@ -474,10 +476,10 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
 
 def predict_with_model(processed_image, model_name: str):
     """Thực hiện prediction với model được chọn"""
-    if model_name not in models:
+    if model_name not in loaded_models:
         raise HTTPException(status_code=400, detail=f"Model {model_name} chưa được load")
     
-    model_info = models[model_name]
+    model_info = loaded_models[model_name]
     model = model_info["model"]
     config = model_info["config"]
     
@@ -527,8 +529,6 @@ def postprocess_prediction(prediction: np.ndarray) -> Dict[str, Any]:
         
         logger.info("probabilities: " + str(probabilities))
         
-        probabilities = np.exp(probabilities) / np.sum(np.exp(probabilities))
-        
         # Tìm class có xác suất cao nhất
         predicted_class_idx = np.argmax(probabilities)
         predicted_class = CLASS_NAMES[predicted_class_idx]
@@ -566,7 +566,7 @@ async def root():
     return {
         "message": "Alzheimer Prediction API is running",
         "status": "healthy",
-        "models_loaded": list(models.keys()),
+        "models_loaded": list(loaded_models.keys()),
         "available_models": list(MODEL_CONFIGS.keys())
     }
 
@@ -575,7 +575,7 @@ async def health_check():
     """Detailed health check"""
     return {
         "status": "healthy",
-        "models_loaded": list(models.keys()),
+        "models_loaded": list(loaded_models.keys()),
         "available_models": list(MODEL_CONFIGS.keys()),
         "api_version": "1.0.0"
     }
@@ -594,7 +594,7 @@ async def predict_alzheimer(file: UploadFile = File(...), model_name: str = "cnn
     """
     try:
         # Load model nếu chưa được load
-        if model_name not in models:
+        if model_name not in loaded_models:
             logger.info(f"Loading model {model_name}...")
             success = load_model(model_name)
             if not success:
@@ -642,7 +642,7 @@ async def predict_batch(files: list[UploadFile] = File(...), model_name: str = "
         raise HTTPException(status_code=400, detail="Tối đa 10 file mỗi lần")
     
     # Load model nếu chưa được load
-    if model_name not in models:
+    if model_name not in loaded_models:
         load_model(model_name)
     
     results = []
@@ -675,7 +675,7 @@ async def get_model_info():
     """Thông tin về các model"""
     return {
         "available_models": MODEL_CONFIGS,
-        "loaded_models": list(models.keys()),
+        "loaded_models": list(loaded_models.keys()),
         "classes": CLASS_NAMES
     }
 

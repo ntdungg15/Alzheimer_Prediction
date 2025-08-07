@@ -58,7 +58,7 @@ MODEL_CONFIGS = {
     "cnn": {
         "path": "models/cnn_model.h5",
         "type": "tensorflow",
-        "input_size": (224, 224),
+        "input_size": (128, 128),
         "preprocessing": "standard"
     },
     "resnet50": {
@@ -141,6 +141,134 @@ class VGG16Binary(nn.Module):
     
     def forward(self, x):
         return self.vgg16(x)
+
+# Định nghĩa CNN model blocks để match với Kaggle notebook
+def conv_block(filters, act='relu'):
+    """Conv block matching Kaggle implementation"""
+    if not TF_AVAILABLE:
+        raise ImportError("TensorFlow is required for CNN blocks")
+    
+    from tensorflow.keras import Sequential, layers
+    
+    block = Sequential([
+        layers.Conv2D(filters, 3, padding='same', kernel_initializer='he_normal'),
+        layers.BatchNormalization(),
+        layers.Activation(act),
+        
+        layers.Conv2D(filters, 3, padding='same', kernel_initializer='he_normal'),
+        layers.BatchNormalization(),
+        layers.Activation(act),
+        
+        layers.MaxPooling2D(pool_size=(2, 2))
+    ])
+    
+    return block
+
+def dense_block(units, dropout_rate, act='relu'):
+    """Dense block matching Kaggle implementation"""
+    if not TF_AVAILABLE:
+        raise ImportError("TensorFlow is required for dense blocks")
+    
+    from tensorflow.keras import Sequential, layers
+    
+    block = Sequential([
+        layers.Dense(units, kernel_initializer='he_normal'),
+        layers.BatchNormalization(),
+        layers.Activation(act),
+        layers.Dropout(dropout_rate)
+    ])
+    
+    return block
+
+def construct_cnn_model(input_size=(224, 224), act='relu'):
+    """
+    Construct CNN model matching Kaggle notebook architecture
+    """
+    if not TF_AVAILABLE:
+        raise ImportError("TensorFlow is required for CNN model")
+    
+    from tensorflow.keras import Sequential, layers
+    
+    model = Sequential([
+        layers.Input(shape=(*input_size, 3)),
+
+        layers.Conv2D(16, 3, padding='same', kernel_initializer='he_normal'),
+        layers.BatchNormalization(),
+        layers.Activation(act),
+
+        layers.Conv2D(16, 3, padding='same', kernel_initializer='he_normal'),
+        layers.BatchNormalization(),
+        layers.Activation(act),
+        layers.MaxPooling2D(),
+
+        conv_block(32, act=act),
+        conv_block(64, act=act),
+        conv_block(128, act=act),
+        layers.Dropout(0.2),
+        conv_block(256, act=act),
+        layers.Dropout(0.2),
+
+        layers.Flatten(),
+        dense_block(512, 0.7, act=act),
+        dense_block(128, 0.5, act=act),
+        dense_block(64, 0.3, act=act),
+
+        layers.Dense(4, activation='softmax')
+    ], name="cnn_model")
+
+    return model
+
+class CNNAlzheimerModel:
+    """
+    CNN model for Alzheimer prediction matching Kaggle implementation
+    """
+    def __init__(self, input_size=(224, 224), act='relu'):
+        if not TF_AVAILABLE:
+            raise ImportError("TensorFlow is required for CNN model")
+        
+        self.input_size = input_size
+        self.activation = act
+        self.model = None
+        self._build_model()
+    
+    def _build_model(self):
+        """Build CNN model exactly matching Kaggle notebook"""
+        try:
+            import tensorflow as tf
+            
+            # Build model using construct function
+            self.model = construct_cnn_model(self.input_size, self.activation)
+            
+            # Compile model - MATCH Kaggle
+            METRICS = [
+                tf.keras.metrics.CategoricalAccuracy(name='acc'),
+                tf.keras.metrics.AUC(name='auc'),
+            ]
+            
+            self.model.compile(
+                optimizer='adam',
+                loss=tf.losses.CategoricalCrossentropy(),
+                metrics=METRICS
+            )
+            
+            logger.info("CNN model built successfully")
+            logger.info(f"Model input shape: {self.model.input_shape}")
+            logger.info(f"Model output shape: {self.model.output_shape}")
+            
+        except Exception as e:
+            logger.error(f"Error building CNN model: {str(e)}")
+            raise e
+    
+    def get_model(self):
+        """Return the compiled model"""
+        return self.model
+    
+    def predict(self, x):
+        """Prediction method"""
+        if self.model:
+            return self.model.predict(x)
+        else:
+            raise ValueError("Model not built yet")
 
 # Định nghĩa Inception V3 model class cho TensorFlow - MATCH với Kaggle notebook
 class InceptionV3AlzheimerModel:
@@ -281,8 +409,27 @@ def load_model(model_name: str = "cnn"):
             if not TF_AVAILABLE:
                 raise ImportError("TensorFlow không có sẵn")
             
+            # Special handling for CNN model
+            if model_name == "cnn":
+                try:
+                    # Try to load saved model first
+                    model = tf.keras.models.load_model(config["path"])
+                    logger.info(f"Loaded pre-trained CNN from {config['path']}")
+                    
+                except Exception as load_error:
+                    logger.warning(f"Failed to load pre-trained CNN model: {load_error}")
+                    logger.info("Creating new CNN model from scratch")
+                    
+                    # Create new CNN model matching Kaggle architecture
+                    cnn_builder = CNNAlzheimerModel(
+                        input_size=config["input_size"], 
+                        act='relu'
+                    )
+                    model = cnn_builder.get_model()
+                    logger.info("Created new CNN model matching Kaggle architecture")
+            
             # Special handling for Inception V3
-            if model_name == "inception-v3":
+            elif model_name == "inception-v3":
                 try:
                     # Try to load saved model first
                     model = tf.keras.models.load_model(config["path"])
@@ -462,8 +609,13 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
                     logger.warning("TensorFlow not available, using standard preprocessing")
                     # Standard normalization: scale to [-1, 1] range (Inception V3 expects this)
                     img_array = img_array.astype(np.float32) / 127.5 - 1.0
+            elif preprocessing_type == "standard":
+                # Standard preprocessing for CNN - MATCH Kaggle
+                # Normalize to [0, 1] range
+                img_array = img_array.astype(np.float32) / 255.0
+                logger.info("Applied standard CNN preprocessing")
             else:
-                # Standard preprocessing
+                # Default preprocessing
                 img_array = img_array.astype(np.float32) / 255.0
             
             # Thêm batch dimension

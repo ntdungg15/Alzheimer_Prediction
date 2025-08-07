@@ -324,8 +324,8 @@
 
         <div style="margin: 20px 0;">
             <label for="modelSelect" style="font-weight: bold; color: #555;">Chọn mô hình dự đoán:</label>
-            <select id="modelSelect" class="btn" style="min-width: auto; padding: 10px 20px; color: #555">
-                <option value="resnet50">ResNet50</option>
+            <select id="modelSelect" class="btn" style="min-width: auto; padding: 10px 20px; color: #555" defa>
+                <option value="resnet50" selected>ResNet50</option>
                 <option value="cnn">CNN</option>
                 <option value="vgg16">VGG16</option>
                 <option value="inception-v3">Inception V3</option>
@@ -495,7 +495,7 @@
                     this.showProgress();
                     await this.simulateProgress();
 
-                    const response = await fetch(`${this.apiUrl}/predict`, {
+                    const response = await fetch(`${this.apiUrl}/predict?model_name=${modelName}`, {
                         method: 'POST',
                         body: formData
                     });

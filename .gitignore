@@ -24,9 +24,3 @@ coverage.xml
 *.egg-info/
 dist/
 build/
-*.so
-*.h5
-*.pth
-*.ckpt
-models/
-downloads/

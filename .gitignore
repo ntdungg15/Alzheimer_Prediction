@@ -25,4 +25,10 @@ coverage.xml
 dist/
 build/
 
-backEnd\models\inception_v3_model.h5
+# Model files - sửa đường dẫn và thêm tất cả model formats
+backEnd/models/*.h5
+backEnd/models/*.pth
+backEnd/models/*.pkl
+backEnd/models/*.pt
+backEnd/models/*.onnx
+backEnd/models/*.jobl

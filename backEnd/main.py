@@ -7,6 +7,7 @@ import io
 import uvicorn
 from typing import Dict, Any
 import logging
+import torchvision.models as torch_models
 
 # Cấu hình logging trước
 logging.basicConfig(level=logging.INFO)
@@ -56,9 +57,9 @@ current_model = None
 # Cấu hình các model
 MODEL_CONFIGS = {
     "cnn": {
-        "path": "C:/Users/PC/Downloads/cnn_model.h5",
+        "path": "models/cnn_model.h5",
         "type": "tensorflow",
-        "input_size": (224, 224),
+        "input_size": (128, 128),  # Match Kaggle: 128x128
         "preprocessing": "standard"
     },
     "resnet50": {
@@ -68,22 +69,142 @@ MODEL_CONFIGS = {
         "preprocessing": "resnet"
     },
     "vgg16": {
-        "path": "C:/Users/PC/Downloads/vgg16_finetuned.pth",
+        "path": "models/vgg16_finetuned.pth",  # Sử dụng relative path
         "type": "pytorch",
         "input_size": (128, 128),  # Match Kaggle training
         "preprocessing": "vgg"
     },
     "inception-v3": {
-        "path": "C:/Users/PC/Downloads/inception_v3_model.h5",
+        "path": "models/inception_v3_model.h5",
         "type": "tensorflow", 
         "input_size": (128, 128),  # Match Kaggle training
         "preprocessing": "inception"
     }
 }
 
-# Class names - supporting both 4-class and binary classification
-CLASS_NAMES_4 = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
-CLASS_NAMES_2 = ["Normal", "Alzheimer"]
+# Class names
+CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
+
+# CNN Model class cho TensorFlow - MATCH với Kaggle notebook CHÍNH XÁC
+class CNNAlzheimerModel:
+    """
+    CNN model for Alzheimer prediction matching Kaggle implementation EXACTLY
+    Kaggle architecture:
+    - Input: (128, 128, 3)
+    - Conv2D(16) -> BN -> ReLU -> Conv2D(16) -> BN -> ReLU -> MaxPool
+    - Conv blocks: 32, 64, 128, Dropout(0.2), 256, Dropout(0.2)
+    - Flatten -> Dense blocks: 512(0.7), 128(0.5), 64(0.3) -> Dense(4, softmax)
+    """
+    def __init__(self, num_classes=4, input_size=(128, 128, 3), activation='relu'):
+        if not TF_AVAILABLE:
+            raise ImportError("TensorFlow is required for CNN model")
+        
+        self.num_classes = num_classes
+        self.input_size = input_size
+        self.activation = activation
+        self.model = None
+        self._build_model()
+    
+    def conv_block(self, filters, act='relu'):
+        """Conv block - EXACT MATCH với Kaggle"""
+        from tensorflow.keras import Sequential, layers
+        
+        block = Sequential([
+            layers.Conv2D(filters, 3, padding='same', kernel_initializer='he_normal'),
+            layers.BatchNormalization(),
+            layers.Activation(act),
+            
+            layers.Conv2D(filters, 3, padding='same', kernel_initializer='he_normal'),
+            layers.BatchNormalization(),
+            layers.Activation(act),
+            
+            layers.MaxPooling2D(pool_size=(2, 2))
+        ])
+        
+        return block
+    
+    def dense_block(self, units, dropout_rate, act='relu'):
+        """Dense block - EXACT MATCH với Kaggle"""
+        from tensorflow.keras import Sequential, layers
+        
+        block = Sequential([
+            layers.Dense(units, kernel_initializer='he_normal'),
+            layers.BatchNormalization(),
+            layers.Activation(act),
+            layers.Dropout(dropout_rate)
+        ])
+        
+        return block
+    
+    def _build_model(self):
+        """Build CNN model EXACTLY matching Kaggle notebook"""
+        try:
+            from tensorflow.keras import Sequential, layers
+            import tensorflow as tf
+            
+            # IMAGE_SIZE = [128, 128] - EXACT MATCH với Kaggle
+            IMAGE_SIZE = [128, 128]
+            
+            # Construct model - EXACT MATCH với Kaggle construct_model function
+            model = Sequential([
+                layers.Input(shape=(*IMAGE_SIZE, 3)),
+
+                # Initial conv layers
+                layers.Conv2D(16, 3, padding='same', kernel_initializer='he_normal'),
+                layers.BatchNormalization(),
+                layers.Activation(self.activation),
+
+                layers.Conv2D(16, 3, padding='same', kernel_initializer='he_normal'),
+                layers.BatchNormalization(),
+                layers.Activation(self.activation),
+                layers.MaxPooling2D(),
+
+                # Conv blocks - EXACT sequence từ Kaggle
+                self.conv_block(32, act=self.activation),
+                self.conv_block(64, act=self.activation),
+                self.conv_block(128, act=self.activation),
+                layers.Dropout(0.2),
+                self.conv_block(256, act=self.activation),
+                layers.Dropout(0.2),
+
+                # Dense layers
+                layers.Flatten(),
+                self.dense_block(512, 0.7, act=self.activation),
+                self.dense_block(128, 0.5, act=self.activation),
+                self.dense_block(64, 0.3, act=self.activation),
+
+                # Output layer cho 4 classes
+                layers.Dense(4, activation='softmax')
+            ], name="cnn_model")
+            
+            self.model = model
+            
+            # Compile model - MATCH Kaggle
+            self.model.compile(
+                optimizer='adam',
+                loss='categorical_crossentropy',  # For 4-class categorical labels
+                metrics=['accuracy']
+            )
+            
+            logger.info("CNN model built successfully - EXACT Kaggle match")
+            logger.info(f"Model input shape: {self.model.input_shape}")
+            logger.info(f"Model output shape: {self.model.output_shape}")
+            logger.info("Architecture: Conv(16x2)->MaxPool->Conv(32,64,128)->Dropout->Conv(256)->Dropout->Flatten->Dense(512,128,64)->Dense(4)")
+            
+        except Exception as e:
+            logger.error(f"Error building CNN model: {str(e)}")
+            raise e
+    
+    def get_model(self):
+        """Return the compiled model"""
+        return self.model
+    
+    def predict(self, x):
+        """Prediction method"""
+        if self.model:
+            return self.model.predict(x)
+        else:
+            raise ValueError("Model not built yet")
 
 # Định nghĩa VGG16 model class cho PyTorch - MATCH với Kaggle notebook
 class VGG16AlzheimerModel(nn.Module):
@@ -163,9 +284,15 @@ class ResNet50AlzheimerModel(nn.Module):
         x = self.classifier(x)
         return x
 
-# Định nghĩa Inception V3 model class cho TensorFlow - MATCH với Kaggle notebook
+# Định nghĩa Inception V3 model class cho TensorFlow - MATCH với Kaggle notebook CHÍNH XÁC
 class InceptionV3AlzheimerModel:
-    """Inception V3 model for Alzheimer prediction matching Kaggle implementation"""
+    """
+    Inception V3 model for Alzheimer prediction matching Kaggle implementation EXACTLY
+    Kaggle architecture:
+    - Input: (128, 128, 3)
+    - InceptionV3(imagenet, include_top=False) 
+    - Dropout(0.5) -> Flatten() -> Dense(1024) -> Dense(512) -> Dense(256) -> Dense(128) -> Dense(4, softmax)
+    """
     def __init__(self, num_classes=4, input_size=(128, 128, 3)):
         if not TF_AVAILABLE:
             raise ImportError("TensorFlow is required for Inception V3 model")
@@ -176,50 +303,49 @@ class InceptionV3AlzheimerModel:
         self._build_model()
     
     def _build_model(self):
-        """Build Inception V3 model exactly matching Kaggle notebook"""
+        """Build Inception V3 model EXACTLY matching Kaggle notebook"""
         try:
             from tensorflow.keras.applications import InceptionV3
             from tensorflow.keras.layers import Dense, Dropout, Flatten
             from tensorflow.keras.models import Model
+            import tensorflow as tf
             
-            # Base Inception V3 model - MATCH Kaggle
+            # Base Inception V3 model - EXACT MATCH với Kaggle
             inception = InceptionV3(
-                input_shape=self.input_size,  # (128, 128, 3) 
+                input_shape=(128, 128, 3),  # EXACT: (128, 128, 3)
                 weights='imagenet', 
                 include_top=False
             )
             
-            # Freeze all layers - MATCH Kaggle
+            # Freeze all layers - EXACT MATCH với Kaggle
             for layer in inception.layers:
                 layer.trainable = False
                 
-            # Custom classifier - MATCH Kaggle exactly
-            x = Dropout(0.5)(inception.output)      
-            x = Flatten()(x)                        
-            x = Dense(1024, activation='relu')(x)   
-            x = Dense(512, activation='relu')(x)    
-            x = Dense(256, activation='relu')(x)    
-            x = Dense(128, activation='relu')(x)    
+            # Custom classifier - EXACT MATCH với Kaggle architecture
+            x = Dropout(0.5)(inception.output)      # Dropout trước Flatten
+            x = Flatten()(x)                        # Flatten feature maps
+            x = Dense(1024, activation='relu')(x)   # Dense 1024 
+            x = Dense(512, activation='relu')(x)    # Dense 512
+            x = Dense(256, activation='relu')(x)    # Dense 256
+            x = Dense(128, activation='relu')(x)    # Dense 128
             
-            # Output layer
-            prediction = Dense(self.num_classes, activation='softmax')(x)
+            # Output layer cho 4 classes: [MildDemented, ModerateDemented, NonDemented, VeryMildDemented]
+            prediction = Dense(4, activation='softmax')(x)
             
             # Create model
             self.model = Model(inputs=inception.input, outputs=prediction)
             
             # Compile model - MATCH Kaggle
-            METRICS = [
-                tf.keras.metrics.CategoricalAccuracy(name='acc'),
-                tf.keras.metrics.AUC(name='auc'),
-            ]
-            
             self.model.compile(
                 optimizer='adam',
-                loss=tf.losses.CategoricalCrossentropy(),
-                metrics=METRICS
+                loss='categorical_crossentropy',  # For 4-class categorical labels
+                metrics=['accuracy']
             )
             
-            logger.info("Inception V3 model built successfully")
+            logger.info("Inception V3 model built successfully - EXACT Kaggle match")
+            logger.info(f"Model input shape: {self.model.input_shape}")
+            logger.info(f"Model output shape: {self.model.output_shape}")
+            logger.info("Architecture: InceptionV3 -> Dropout(0.5) -> Flatten -> Dense(1024) -> Dense(512) -> Dense(256) -> Dense(128) -> Dense(4)")
             
         except Exception as e:
             logger.error(f"Error building Inception V3 model: {str(e)}")
@@ -250,37 +376,65 @@ def load_model(model_name: str = "cnn"):
         # Kiểm tra file có tồn tại không
         import os
         if not os.path.exists(config["path"]):
-            logger.warning(f"Model file không tồn tại: {config['path']}")
-            # Tạo mock model cho demo
-            loaded_models[model_name] = {
-                "model": create_mock_model(model_name),
-                "config": config
-            }
-            current_model = model_name
-            return False
+            raise FileNotFoundError(f"Model file không tồn tại: {config['path']}")
         
         if config["type"] == "tensorflow":
             if not TF_AVAILABLE:
                 raise ImportError("TensorFlow không có sẵn")
             
-            # Special handling for Inception V3
-            if model_name == "inception-v3":
+            # Special handling for CNN - LOAD từ file .h5 Kaggle
+            if model_name == "cnn":
                 try:
-                    # Try to load saved model first
+                    # Load model trực tiếp từ file .h5 (Kaggle exported model)
                     model = tf.keras.models.load_model(config["path"])
-                    logger.info(f"Loaded pre-trained Inception V3 from {config['path']}")
+                    logger.info(f"✅ Loaded CNN from Kaggle .h5 file: {config['path']}")
+                    logger.info(f"Model input shape: {model.input_shape}")
+                    logger.info(f"Model output shape: {model.output_shape}")
+                    
+                    # Verify model architecture matches Kaggle
+                    if model.input_shape[1:] == (128, 128, 3) and model.output_shape[1] == 4:
+                        logger.info("✅ Model architecture verified: (128,128,3) -> 4 classes")
+                    else:
+                        logger.warning(f"⚠️ Model shape mismatch: input {model.input_shape}, output {model.output_shape}")
                     
                 except Exception as load_error:
-                    logger.warning(f"Failed to load pre-trained model: {load_error}")
-                    logger.info("Creating new Inception V3 model from scratch")
+                    logger.error(f"❌ Failed to load CNN from .h5 file: {load_error}")
+                    logger.info("🔄 Creating new CNN model matching Kaggle architecture...")
                     
-                    # Create new model matching Kaggle architecture
+                    # Fallback: Create new model với kiến trúc Kaggle
+                    cnn_builder = CNNAlzheimerModel(
+                        num_classes=4, 
+                        input_size=(128, 128, 3),
+                        activation='relu'
+                    )
+                    model = cnn_builder.get_model()
+                    logger.info("✅ Created new CNN model with Kaggle architecture")
+            # Special handling for Inception V3 - LOAD từ file .h5 Kaggle
+            elif model_name == "inception-v3":
+                try:
+                    # Load model trực tiếp từ file .h5 (Kaggle exported model)
+                    model = tf.keras.models.load_model(config["path"])
+                    logger.info(f"✅ Loaded Inception V3 from Kaggle .h5 file: {config['path']}")
+                    logger.info(f"Model input shape: {model.input_shape}")
+                    logger.info(f"Model output shape: {model.output_shape}")
+                    
+                    # Verify model architecture matches Kaggle
+                    if model.input_shape[1:] == (128, 128, 3) and model.output_shape[1] == 4:
+                        logger.info("✅ Model architecture verified: (128,128,3) -> 4 classes")
+                    else:
+                        logger.warning(f"⚠️ Model shape mismatch: input {model.input_shape}, output {model.output_shape}")
+                    
+                except Exception as load_error:
+                    logger.error(f"❌ Failed to load Inception V3 from .h5 file: {load_error}")
+                    logger.info("🔄 Creating new Inception V3 model matching Kaggle architecture...")
+                    
+                    # Fallback: Create new model với kiến trúc Kaggle
                     inception_builder = InceptionV3AlzheimerModel(
                         num_classes=4, 
-                        input_size=(128, 128, 3)  # Match Kaggle
+                        input_size=(128, 128, 3)
                     )
                     model = inception_builder.get_model()
-                    logger.info("Created new Inception V3 model")
+                    logger.info("✅ Created new Inception V3 model with Kaggle architecture")
             else:
                 # Regular TensorFlow model loading
                 model = tf.keras.models.load_model(config["path"])
@@ -289,13 +443,13 @@ def load_model(model_name: str = "cnn"):
         elif config["type"] == "pytorch":
             if not TORCH_AVAILABLE:
                 raise ImportError("PyTorch không có sẵn")
-                
+            # Load PyTorch model (VGG16)
             if model_name == "vgg16":
                 try:
                     checkpoint = torch.load(config["path"], map_location='cpu')
                     logger.info(f"Checkpoint keys: {list(checkpoint.keys()) if isinstance(checkpoint, dict) else 'Direct model'}")
                     
-                    # Load 4-class model first (match Kaggle training)
+                    # Load 4-class model (match Kaggle training)
                     model = VGG16AlzheimerModel(num_classes=4, pretrained=False, freeze_features=False)
                     
                     if isinstance(checkpoint, dict):
@@ -313,7 +467,6 @@ def load_model(model_name: str = "cnn"):
                     else:
                         model = checkpoint
                     
-                    # Move to device and set eval mode
                     model.to(device)
                     model.eval()
                     logger.info(f"PyTorch VGG16 model loaded successfully on device: {device}")
@@ -321,7 +474,6 @@ def load_model(model_name: str = "cnn"):
                 except Exception as load_error:
                     logger.error(f"Error loading VGG16: {str(load_error)}")
                     raise load_error
-                    
             elif model_name == "resnet50":
                 try:
                     model = ResNet50AlzheimerModel(num_classes=4)
@@ -349,64 +501,9 @@ def load_model(model_name: str = "cnn"):
         logger.error(f"Error loading model {model_name}: {str(e)}")
         logger.error(f"Error type: {type(e).__name__}")
         
-        # Tạo mock model cho demo
-        loaded_models[model_name] = {
-            "model": create_mock_model(model_name),
-            "config": config
-        }
-        current_model = model_name
         return False
 
-def create_mock_model(model_name: str):
-    """Tạo mock model cho demo khi không có model thật"""
-    logger.info(f"Creating mock model for {model_name}")
-    
-    class MockModel:
-        def __init__(self, model_name):
-            self.model_name = model_name
-            
-        def predict(self, x):
-            # Tạo kết quả deterministic để demo (không random)
-            if isinstance(x, torch.Tensor):
-                batch_size = x.shape[0]
-                # Sử dụng mean của tensor để tạo seed deterministic
-                seed = int(torch.mean(x).item() * 1000) % 1000
-            else:
-                batch_size = x.shape[0]
-                # Sử dụng mean của array để tạo seed deterministic
-                seed = int(np.mean(x) * 1000) % 1000
-            
-            # Set random seed để có kết quả nhất quán
-            np.random.seed(seed)
-            
-            # Prediction với phân phối khác nhau cho từng model
-            if self.model_name in ["vgg16", "resnet50", "inception-v3"]:
-                # 4-class prediction - deterministic
-                if self.model_name == "vgg16":
-                    # VGG16 mock: thiên về NonDemented
-                    predictions = np.array([[0.1, 0.15, 0.6, 0.15]])  # [Mild, Moderate, Non, VeryMild]
-                elif self.model_name == "resnet50":
-                    # ResNet50 mock: thiên về VeryMildDemented  
-                    predictions = np.array([[0.15, 0.1, 0.25, 0.5]])
-                else:  # inception-v3
-                    # Inception mock: cân bằng hơn
-                    predictions = np.array([[0.2, 0.2, 0.3, 0.3]])
-            else:
-                # CNN 2-class prediction - deterministic
-                predictions = np.array([[0.7, 0.3]])  # [Normal, Alzheimer]
-            
-            return predictions
-        
-        def __call__(self, x):
-            # Để hỗ trợ PyTorch-style calling
-            return torch.tensor(self.predict(x), dtype=torch.float32)
-        
-        def eval(self):
-            # Để hỗ trợ PyTorch eval mode
-            return self
-    
-    return MockModel(model_name)
-def preprocess_image(image: Image.Image, model_name: str = "cnn"):
+def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
     """Tiền xử lý ảnh để đưa vào model"""
     try:
         config = MODEL_CONFIGS[model_name]
@@ -421,8 +518,9 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn"):
         image = image.resize(input_size)
         
         if config["type"] == "pytorch":
+            # PyTorch preprocessing (VGG16) - MATCH Kaggle notebook
             if preprocessing_type == "vgg":
-                # VGG16 preprocessing - MATCH Kaggle notebook
+                # Kaggle notebook preprocessing: grayscale->3ch, resize 128, ImageNet normalize
                 transform = transforms.Compose([
                     transforms.Resize((128, 128)),  # Match Kaggle: 128x128
                     transforms.Grayscale(num_output_channels=3),  # Convert to 3-channel
@@ -430,12 +528,12 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn"):
                     transforms.Normalize(mean=[0.485, 0.456, 0.406], 
                                        std=[0.229, 0.224, 0.225])  # ImageNet normalization
                 ])
+                # Apply transform directly to PIL Image
                 img_tensor = transform(image)
                 img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
                 return img_tensor.to(device)
-                
             elif preprocessing_type == "resnet":
-                # ResNet50 preprocessing - MATCH Kaggle notebook
+                # RESNET50
                 transform = transforms.Compose([
                     transforms.Resize(input_size),  
                     transforms.ToTensor(),
@@ -444,21 +542,43 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn"):
                 ])
                 img_tensor = transform(image).unsqueeze(0)
                 return img_tensor.to(device)
-                
         elif config["type"] == "tensorflow":
             # TensorFlow preprocessing
+            # Chuyển thành numpy array
             img_array = np.array(image)
             
-            if preprocessing_type == "inception":
-                # Inception V3 preprocessing - MATCH Kaggle
+            if preprocessing_type == "standard":
+                # CNN preprocessing - EXACT MATCH với Kaggle data preprocessing
+                # Kaggle data: (128, 128, 3) với giá trị pixel [0-255] normalize về [0,1]
                 try:
-                    from tensorflow.keras.applications.inception_v3 import preprocess_input
+                    # Standard normalization like Kaggle CNN training
+                    img_array = img_array.astype(np.float32) / 255.0
+                    logger.info("✅ Applied Kaggle-compatible CNN preprocessing: [0,255] -> [0,1]")
+                except Exception as e:
+                    logger.warning(f"Fallback preprocessing: {e}")
+                    img_array = img_array.astype(np.float32) / 255.0
+            elif preprocessing_type == "resnet":
+                # ResNet preprocessing
+                try:
+                    from tensorflow.keras.applications.resnet50 import preprocess_input
                     img_array = preprocess_input(img_array)
-                    logger.info("Applied Inception V3 specific preprocessing")
                 except ImportError:
                     logger.warning("TensorFlow not available, using standard preprocessing")
-                    # Standard normalization: scale to [-1, 1] range (Inception V3 expects this)
-                    img_array = img_array.astype(np.float32) / 127.5 - 1.0
+                    img_array = img_array.astype(np.float32) / 255.0
+            elif preprocessing_type == "inception":
+                # Inception V3 preprocessing - EXACT MATCH với Kaggle data preprocessing
+                # Kaggle data: (128, 128, 3) với giá trị pixel [0-255] 
+                # Inception V3 expects input range [-1, 1]
+                try:
+                    # Kaggle preprocessing: normalize to [-1, 1] for Inception V3
+                    img_array = img_array.astype(np.float32)
+                    # Scale from [0, 255] to [-1, 1] - chuẩn Inception V3
+                    img_array = (img_array / 127.5) - 1.0
+                    logger.info("✅ Applied Kaggle-compatible Inception V3 preprocessing: [0,255] -> [-1,1]")
+                except Exception as e:
+                    logger.warning(f"Fallback preprocessing: {e}")
+                    # Fallback: standard normalization
+                    img_array = img_array.astype(np.float32) / 255.0
             else:
                 # Standard preprocessing
                 img_array = img_array.astype(np.float32) / 255.0
@@ -537,38 +657,40 @@ def predict_with_model(processed_image, model_name: str):
         logger.error(f"Error type: {type(e).__name__}")
         raise HTTPException(status_code=500, detail=f"Lỗi prediction: {str(e)}")
 
-def postprocess_prediction(prediction: np.ndarray, model_name: str) -> Dict[str, Any]:
-    """Xử lý kết quả prediction từ model"""
+def postprocess_prediction(prediction: np.ndarray, model_name: str = "cnn") -> Dict[str, Any]:
+    """Xử lý kết quả prediction từ model - chỉ hỗ trợ 4-class classification"""
     try:
         # Lấy xác suất của từng class
         probabilities = prediction[0]
-        logger.info(f"Probabilities for {model_name}: {probabilities}")
         
-        # Xác định class names dựa trên model
-        if model_name in ["vgg16", "resnet50", "inception-v3"]:
-            class_names = CLASS_NAMES_4
-        else:
-            class_names = CLASS_NAMES_2
+        logger.info(f"Model: {model_name}, Raw probabilities: {probabilities}")
+        
+        # Kiểm tra số lượng classes
+        if len(probabilities) != 4:
+            logger.error(f"❌ Expected 4 classes, got {len(probabilities)}")
+            raise ValueError(f"Model should output 4 classes, got {len(probabilities)}")
         
         # Tìm class có xác suất cao nhất
         predicted_class_idx = np.argmax(probabilities)
-        predicted_class = class_names[predicted_class_idx]
+        predicted_class = CLASS_NAMES[predicted_class_idx]
         confidence = float(probabilities[predicted_class_idx]) * 100
         
-        # Tạo response
+        # Tạo response với 4 classes
         result = {
             "prediction": predicted_class,
             "confidence": confidence,
-            "probability": {},
+            "probability": {
+                CLASS_NAMES[0]: float(probabilities[0]) * 100,  # MildDemented
+                CLASS_NAMES[1]: float(probabilities[1]) * 100,  # ModerateDemented  
+                CLASS_NAMES[2]: float(probabilities[2]) * 100,  # NonDemented
+                CLASS_NAMES[3]: float(probabilities[3]) * 100,  # VeryMildDemented
+            },
             "status": "success",
+            "model_type": "4-class",
             "model_used": model_name
         }
         
-        # Thêm probabilities cho từng class
-        for i, class_name in enumerate(class_names):
-            if i < len(probabilities):
-                result["probability"][class_name] = float(probabilities[i]) * 100
-        
+        logger.info(f"✅ {model_name} prediction: {predicted_class} ({confidence:.2f}%)")
         return result
         
     except Exception as e:
@@ -582,6 +704,8 @@ async def startup_event():
     logger.info(f"PyTorch available: {TORCH_AVAILABLE}")
     logger.info(f"TensorFlow available: {TF_AVAILABLE}")
     logger.info(f"Device: {device}")
+    # Load default model (CNN) at startup
+    load_model("cnn")
 
 @app.get("/")
 async def root():
@@ -610,7 +734,7 @@ async def health_check():
     }
 
 @app.post("/predict")
-async def predict_alzheimer(file: UploadFile = File(...), model_name: str = "vgg16"):
+async def predict_alzheimer(file: UploadFile = File(...), model_name: str = "cnn"):
     """
     API endpoint dự đoán bệnh Alzheimer từ ảnh
     
@@ -627,7 +751,11 @@ async def predict_alzheimer(file: UploadFile = File(...), model_name: str = "vgg
             logger.info(f"Loading model {model_name}...")
             success = load_model(model_name)
             if not success:
-                logger.warning(f"Failed to load {model_name}, using mock model")
+                logger.error(f"Failed to load {model_name}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Model {model_name} không thể load được. Vui lòng kiểm tra file model tồn tại."
+                )
         
         # Kiểm tra file type
         if not file.content_type.startswith('image/'):
@@ -662,7 +790,7 @@ async def predict_alzheimer(file: UploadFile = File(...), model_name: str = "vgg
         raise HTTPException(status_code=500, detail="Lỗi server nội bộ")
 
 @app.post("/predict-batch")
-async def predict_batch(files: list[UploadFile] = File(...), model_name: str = "vgg16"):
+async def predict_batch(files: list[UploadFile] = File(...), model_name: str = "cnn"):
     """API endpoint dự đoán nhiều ảnh cùng lúc"""
     if len(files) > 10:  # Giới hạn số lượng file
         raise HTTPException(status_code=400, detail="Tối đa 10 file mỗi lần")
@@ -701,8 +829,7 @@ async def get_model_info():
     return {
         "available_models": MODEL_CONFIGS,
         "loaded_models": list(loaded_models.keys()),
-        "class_names_4": CLASS_NAMES_4,
-        "class_names_2": CLASS_NAMES_2,
+        "classes": CLASS_NAMES,
         "pytorch_available": TORCH_AVAILABLE,
         "tensorflow_available": TF_AVAILABLE,
         "device": str(device)

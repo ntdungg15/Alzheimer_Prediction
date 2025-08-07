@@ -1,8 +1,21 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
-pillow==10.1.0
-numpy==1.24.3
-tensorflow==2.13.0
-torch==2.1.0
-torchvision==0.16.0 
+# Build tools - install first
+setuptools>=68.0.0
+wheel>=0.40.0
+
+# Web framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Image processing
+pillow>=10.0.0
+
+# Core ML libraries
+numpy>=1.24.0,<2.0.0
+
+# PyTorch (choose this OR TensorFlow, not both)
+torch>=2.1.0
+torchvision>=0.16.0
+
+# TensorFlow (uncomment if needed instead of PyTorch)
+tensorflow>=2.13.0 

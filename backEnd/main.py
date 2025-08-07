@@ -64,7 +64,7 @@ MODEL_CONFIGS = {
         "preprocessing": "resnet"
     },
     "vgg16": {
-        "path": "C:/Users/PC/Downloads/vgg16_finetuned.pth",
+        "path": "models/vgg16_finetuned.pth",  # Sử dụng relative path
         "type": "pytorch",
         "input_size": (128, 128),  # Match Kaggle training
         "preprocessing": "vgg"
@@ -72,7 +72,7 @@ MODEL_CONFIGS = {
     "inception-v3": {
         "path": "models/inception_v3_model.h5",
         "type": "tensorflow", 
-        "input_size": (299, 299),
+        "input_size": (128, 128),  # Match Kaggle training
         "preprocessing": "inception"
     }
 }
@@ -138,6 +138,125 @@ class VGG16Binary(nn.Module):
     def forward(self, x):
         return self.vgg16(x)
 
+# Định nghĩa Inception V3 model class cho TensorFlow - MATCH với Kaggle notebook
+class InceptionV3AlzheimerModel:
+    """
+    Inception V3 model for Alzheimer prediction matching Kaggle implementation
+    """
+    def __init__(self, num_classes=4, input_size=(128, 128, 3)):
+        if not TF_AVAILABLE:
+            raise ImportError("TensorFlow is required for Inception V3 model")
+        
+        self.num_classes = num_classes
+        self.input_size = input_size
+        self.model = None
+        self._build_model()
+    
+    def _build_model(self):
+        """Build Inception V3 model exactly matching Kaggle notebook"""
+        try:
+            from tensorflow.keras.applications import InceptionV3
+            from tensorflow.keras.layers import Dense, Dropout, Flatten
+            from tensorflow.keras.models import Model
+            import tensorflow as tf
+            
+            # Base Inception V3 model - MATCH Kaggle
+            inception = InceptionV3(
+                input_shape=self.input_size,  # (128, 128, 3) 
+                weights='imagenet', 
+                include_top=False
+            )
+            
+            # Freeze all layers - MATCH Kaggle
+            for layer in inception.layers:
+                layer.trainable = False
+                
+            # Custom classifier - MATCH Kaggle exactly
+            x = Dropout(0.5)(inception.output)      
+            x = Flatten()(x)                        
+            x = Dense(1024, activation='relu')(x)   
+            x = Dense(512, activation='relu')(x)    
+            x = Dense(256, activation='relu')(x)    
+            x = Dense(128, activation='relu')(x)    
+            
+            # Output layer
+            prediction = Dense(self.num_classes, activation='softmax')(x)
+            
+            # Create model
+            self.model = Model(inputs=inception.input, outputs=prediction)
+            
+            # Compile model - MATCH Kaggle
+            METRICS = [
+                tf.keras.metrics.CategoricalAccuracy(name='acc'),
+                tf.keras.metrics.AUC(name='auc'),
+            ]
+            
+            self.model.compile(
+                optimizer='adam',
+                loss=tf.losses.CategoricalCrossentropy(),
+                metrics=METRICS
+            )
+            
+            logger.info("Inception V3 model built successfully")
+            logger.info(f"Model input shape: {self.model.input_shape}")
+            logger.info(f"Model output shape: {self.model.output_shape}")
+            
+        except Exception as e:
+            logger.error(f"Error building Inception V3 model: {str(e)}")
+            raise e
+    
+    def get_model(self):
+        """Return the compiled model"""
+        return self.model
+    
+    def predict(self, x):
+        """Prediction method"""
+        if self.model:
+            return self.model.predict(x)
+        else:
+            raise ValueError("Model not built yet")
+
+# Compatibility class for 2-class prediction (Inception V3 binary)
+class InceptionV3Binary:
+    """Convert 4-class Inception V3 to binary classifier"""
+    def __init__(self, pretrained_4class_model):
+        if not TF_AVAILABLE:
+            raise ImportError("TensorFlow is required")
+            
+        from tensorflow.keras.layers import Dense
+        from tensorflow.keras.models import Model
+        import tensorflow as tf
+        
+        # Get the base model without the final classification layer
+        base_model = pretrained_4class_model.model
+        
+        # Remove the last layer (4-class output)
+        x = base_model.layers[-2].output  # Get layer before final Dense
+        
+        # Add new binary classification layer
+        binary_output = Dense(2, activation='softmax', name='binary_output')(x)
+        
+        # Create new model
+        self.model = Model(inputs=base_model.input, outputs=binary_output)
+        
+        # Compile for binary classification
+        self.model.compile(
+            optimizer='adam',
+            loss=tf.losses.CategoricalCrossentropy(),
+            metrics=[
+                tf.keras.metrics.CategoricalAccuracy(name='acc'),
+                tf.keras.metrics.AUC(name='auc'),
+            ]
+        )
+        
+        logger.info("Created binary Inception V3 classifier (Normal vs Alzheimer)")
+    
+    def predict(self, x):
+        return self.model.predict(x)
+    
+    def get_model(self):
+        return self.model
+
 def load_model(model_name: str = "cnn"):
     """Load model AI đã train"""
     global models, current_model
@@ -157,10 +276,33 @@ def load_model(model_name: str = "cnn"):
         if config["type"] == "tensorflow":
             if not TF_AVAILABLE:
                 raise ImportError("TensorFlow không có sẵn")
-            # Load TensorFlow/Keras model
-            model = tf.keras.models.load_model(config["path"])
-            logger.info(f"TensorFlow model {model_name} loaded successfully from {config['path']}")
             
+            # Special handling for Inception V3
+            if model_name == "inception-v3":
+                try:
+                    # Try to load saved model first
+                    model = tf.keras.models.load_model(config["path"])
+                    logger.info(f"Loaded pre-trained Inception V3 from {config['path']}")
+                    
+                except Exception as load_error:
+                    logger.warning(f"Failed to load pre-trained model: {load_error}")
+                    logger.info("Creating new Inception V3 model from scratch")
+                    
+                    # Create new model matching Kaggle architecture
+                    inception_builder = InceptionV3AlzheimerModel(
+                        num_classes=4, 
+                        input_size=(128, 128, 3)  # Match Kaggle
+                    )
+                    model_4class = inception_builder.get_model()
+                    
+                    # Convert to binary classifier
+                    model = InceptionV3Binary(inception_builder).get_model()
+                    logger.info("Created new Inception V3 binary classifier")
+            else:
+                # Regular TensorFlow model loading
+                model = tf.keras.models.load_model(config["path"])
+                logger.info(f"TensorFlow model {model_name} loaded successfully from {config['path']}")
+                
         elif config["type"] == "pytorch":
             if not TORCH_AVAILABLE:
                 raise ImportError("PyTorch không có sẵn")
@@ -302,13 +444,16 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
                     logger.warning("TensorFlow not available, using standard preprocessing")
                     img_array = img_array.astype(np.float32) / 255.0
             elif preprocessing_type == "inception":
-                # Inception preprocessing  
+                # Inception V3 preprocessing - MATCH Kaggle
+                # Kaggle uses 128x128 input size for Inception V3
                 try:
                     from tensorflow.keras.applications.inception_v3 import preprocess_input
                     img_array = preprocess_input(img_array)
+                    logger.info("Applied Inception V3 specific preprocessing")
                 except ImportError:
                     logger.warning("TensorFlow not available, using standard preprocessing")
-                    img_array = img_array.astype(np.float32) / 255.0
+                    # Standard normalization: scale to [-1, 1] range (Inception V3 expects this)
+                    img_array = img_array.astype(np.float32) / 127.5 - 1.0
             else:
                 # Standard preprocessing
                 img_array = img_array.astype(np.float32) / 255.0

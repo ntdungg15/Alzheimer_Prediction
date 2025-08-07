@@ -26,3 +26,4 @@ dist/
 build/
 
 backEnd\models\inception_v3_model.h5
+backEnd\models\cnn_model.h5

@@ -24,3 +24,5 @@ coverage.xml
 *.egg-info/
 dist/
 build/
+
+backEnd\models\inception_v3_model.h5

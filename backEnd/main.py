@@ -7,6 +7,7 @@ import io
 import uvicorn
 from typing import Dict, Any
 import logging
+import torchvision.models as models
 
 # Cấu hình logging trước
 logging.basicConfig(level=logging.INFO)
@@ -28,6 +29,9 @@ try:
 except ImportError:
     TORCH_AVAILABLE = False
     logger.warning("PyTorch not available")
+
+# Device
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Khởi tạo FastAPI app
 app = FastAPI(
@@ -58,9 +62,9 @@ MODEL_CONFIGS = {
         "preprocessing": "standard"
     },
     "resnet50": {
-        "path": "models/resnet50_model.h5", 
+        "path": "models/resnet50-aug.pth", 
         "type": "tensorflow",
-        "input_size": (224, 224),
+        "input_size": (128, 128),
         "preprocessing": "resnet"
     },
     "vgg16": {
@@ -77,7 +81,7 @@ MODEL_CONFIGS = {
     }
 }
 
-CLASS_NAMES = ["Normal", "Alzheimer"]  # Tên các class
+CLASS_NAMES = ["MildDemented", "ModerateDemented", "NonDemented", "VeryMildDemented"]
 
 # Định nghĩa VGG16 model class cho PyTorch - MATCH với Kaggle notebook
 class VGG16AlzheimerModel(nn.Module):
@@ -349,7 +353,34 @@ def load_model(model_name: str = "cnn"):
                 except Exception as load_error:
                     logger.error(f"Error loading VGG16: {str(load_error)}")
                     raise load_error
-                        
+            elif model_name == "resnet50":
+                model = models.resnet50(weights=None)  # Không load pretrained weights
+                model.fc = nn.Identity()
+                model.fc = nn.Sequential(
+                    nn.Dropout(p=0.3),                   # dropout_0
+                    nn.Flatten(),                        # flatten
+                    
+                    nn.BatchNorm1d(2048),                # batch_normalization
+                    nn.Linear(2048, 1024),               # dense
+                    
+                    nn.BatchNorm1d(1024),                # batch_normalization_1
+                    nn.Linear(1024, 512),                # dense_1
+                    
+                    nn.BatchNorm1d(512),                 # batch_normalization_2
+                    nn.ReLU(),                           # activation
+                    nn.Dropout(p=0.3),                   # dropout_2
+                
+                    nn.Linear(512, 256),                 # dense_2
+                    nn.BatchNorm1d(256),                 # batch_normalization_3
+                    nn.ReLU(),                           # activation_1
+                    nn.Dropout(p=0.3),                   # dropout_3
+                
+                    nn.Linear(256, 4)          # dense_3 (output)
+                )
+                
+                model.load_state_dict(torch.load(MODEL_CONFIGS["resnet50"]["path"], map_location=device))
+                model.to(device)
+                model.eval()
             else:
                 raise Exception(f"PyTorch model {model_name} chưa được implement")
         
@@ -364,41 +395,7 @@ def load_model(model_name: str = "cnn"):
         logger.error(f"Error loading model {model_name}: {str(e)}")
         logger.error(f"Error type: {type(e).__name__}")
         
-        # Tạo mock model cho demo
-        models[model_name] = {
-            "model": create_mock_model(),
-            "config": config
-        }
-        current_model = model_name
         return False
-
-def create_mock_model():
-    """Tạo mock model cho demo khi không có model thật"""
-    logger.info("Creating mock model for demo purposes")
-    
-    class MockModel:
-        def predict(self, x):
-            # Tạo kết quả random để demo
-            if isinstance(x, torch.Tensor):
-                batch_size = x.shape[0]
-            else:
-                batch_size = x.shape[0]
-            
-            # Random prediction với xác suất nghiêng về Normal (80%)
-            predictions = np.random.random((batch_size, 2))
-            predictions[:, 0] = predictions[:, 0] * 0.8 + 0.1  # Normal: 10-90%
-            predictions[:, 1] = 1 - predictions[:, 0]  # Alzheimer: phần còn lại
-            return predictions
-        
-        def __call__(self, x):
-            # Để hỗ trợ PyTorch-style calling
-            return torch.tensor(self.predict(x), dtype=torch.float32)
-        
-        def eval(self):
-            # Để hỗ trợ PyTorch eval mode
-            return self
-    
-    return MockModel()
 
 def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
     """Tiền xử lý ảnh để đưa vào model"""
@@ -429,7 +426,16 @@ def preprocess_image(image: Image.Image, model_name: str = "cnn") -> np.ndarray:
                 img_tensor = transform(image)
                 img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
                 return img_tensor
-        
+            elif preprocessing_type == "resnet":
+                # RESNET50
+                transform = transforms.Compose([
+                    transforms.Resize(input_size),  
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=[0.27828214, 0.27828214, 0.27828214], 
+                                       std=[0.32666304, 0.32666304, 0.32666304])  
+                ])
+                img_tensor = transform(image).unsqueeze(0)
+                return img_tensor.to(device)
         elif config["type"] == "tensorflow":
             # TensorFlow preprocessing
             # Chuyển thành numpy array
@@ -519,6 +525,10 @@ def postprocess_prediction(prediction: np.ndarray) -> Dict[str, Any]:
         # Lấy xác suất của từng class
         probabilities = prediction[0]
         
+        logger.info("probabilities: " + str(probabilities))
+        
+        probabilities = np.exp(probabilities) / np.sum(np.exp(probabilities))
+        
         # Tìm class có xác suất cao nhất
         predicted_class_idx = np.argmax(probabilities)
         predicted_class = CLASS_NAMES[predicted_class_idx]
@@ -529,8 +539,10 @@ def postprocess_prediction(prediction: np.ndarray) -> Dict[str, Any]:
             "prediction": predicted_class,
             "confidence": confidence,
             "probability": {
-                "normal": float(probabilities[0]) * 100,
-                "alzheimer": float(probabilities[1]) * 100
+                CLASS_NAMES[0]: float(probabilities[0]) * 100,
+                CLASS_NAMES[1]: float(probabilities[1]) * 100,
+                CLASS_NAMES[2]: float(probabilities[2]) * 100,
+                CLASS_NAMES[3]: float(probabilities[3]) * 100,
             },
             "status": "success"
         }
